@@ -191,6 +191,12 @@ func run(log *slog.Logger) error {
 		RunAsGroup: cfg.PodRunAsGroup,
 	}
 
+	// Resources of the task pods' helper containers; none unless configured.
+	helperResources, err := k8sbackend.ParseHelperResources(cfg.TaskHelperResources)
+	if err != nil {
+		return fmt.Errorf("CONQUEST_TASK_HELPER_RESOURCES: %w", err)
+	}
+
 	// Try to create K8s backend (only works inside a K8s cluster).
 	var taskBackend *k8sbackend.Backend
 	var clientset kubernetes.Interface
@@ -214,6 +220,7 @@ func run(log *slog.Logger) error {
 			ImagePullSecrets:  cfg.ImagePullSecrets,
 			Workspace:         wsCfg,
 			PodSecurity:       podSecurity,
+			HelperResources:   helperResources,
 		}
 		taskBackend = k8sbackend.NewBackend(clientset, backendCfg, log)
 		log.Info("k8s backend enabled",

@@ -48,6 +48,9 @@ type Config struct {
 	ImagePullSecrets  []string
 	Workspace         WorkspaceConfig
 	PodSecurity       PodSecurityConfig
+	// HelperResources are the resources of the task pods' helper containers
+	// (copy-tools, stage-in); the zero value sets none. See ParseHelperResources.
+	HelperResources corev1.ResourceRequirements
 }
 
 // buildJobSpec creates a K8s Job spec from a TES task.
@@ -206,11 +209,13 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 								{Name: "tools", MountPath: "/tools"},
 							},
 							SecurityContext: containerSecurityContext(cfg.PodSecurity),
+							Resources:       helperResources(cfg),
 						},
 						{
 							Name:            "stage-in",
 							Image:           cfg.ConquestImage,
 							SecurityContext: containerSecurityContext(cfg.PodSecurity),
+							Resources:       helperResources(cfg),
 							Command: []string{
 								"/tools/conquest", "filer", "stage-in",
 								"--manifest", "/stage/manifest.json",
