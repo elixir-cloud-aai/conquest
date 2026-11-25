@@ -280,7 +280,9 @@ unscoped and sees every run, as before; no code path sets an owner yet, so
 existing deployments see no change. Only reads are scoped: writes address a
 run or task that a scoped read has returned, and aggregates (the state
 counts in `service-info`) and internal callers (reconcilers, the dispatcher,
-the runner callback API) stay unscoped.
+the runner callback API) stay unscoped. A public TES task that names a run
+in the tag `conquest_run_id` is refused with 404 unless the caller can read
+that run.
 
 ## Federation: Remote TES Endpoints
 
