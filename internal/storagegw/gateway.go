@@ -287,12 +287,23 @@ func parsePath(escaped string) (taskID, sig, bucket, key string, ok bool) {
 	var keyParts []string
 	for _, seg := range strings.Split(parts[3], "/") {
 		v, err := url.PathUnescape(seg)
-		if err != nil || v == "." || v == ".." {
+		if err != nil || hasDotSegment(v) {
 			return "", "", "", "", false
 		}
 		keyParts = append(keyParts, v)
 	}
 	return decoded[0], decoded[1], decoded[2], strings.Join(keyParts, "/"), true
+}
+
+// hasDotSegment reports whether a decoded path segment is, or contains as
+// an encoded slash (%2F) would, a "." or ".." segment.
+func hasDotSegment(decoded string) bool {
+	for _, part := range strings.Split(decoded, "/") {
+		if part == "." || part == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // scope is what a task may read and write.

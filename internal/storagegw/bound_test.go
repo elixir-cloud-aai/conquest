@@ -151,3 +151,23 @@ func TestListNeedsLister(t *testing.T) {
 		t.Errorf("status = %d, presigned = %v", rec.Code, p.calls)
 	}
 }
+
+func TestEncodedTraversal(t *testing.T) {
+	task := activeTask()
+	task.RunID = "r1"
+	// a request may name such a key; the bound must not be fooled by it
+	task.TaskRequestPayload = json.RawMessage(`{"inputs": [{"url": "s3://conquest/runs/r1/../r2/secret.txt", "path": "/x"}]}`)
+	gw, p, h := newGateway(t, task)
+	gw.SetBound(func(context.Context, *domain.Task) (string, error) { return "conquest/runs/r1/", nil })
+	good := gw.URL("t1", "conquest", "runs/r1/x")
+
+	for _, key := range []string{"runs/r1/..%2Fr2/secret.txt", "runs/r1%2F..%2Fr2/secret.txt", "runs/r1/.%2F..%2F..%2Fr2/secret.txt"} {
+		u := strings.Replace(good, "runs/r1/x", key, 1)
+		if rec := do(t, h, http.MethodGet, u); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", key, rec.Code)
+		}
+	}
+	if len(p.calls) != 0 {
+		t.Errorf("presigned = %v", p.calls)
+	}
+}
