@@ -51,6 +51,10 @@ type Config struct {
 	// HelperResources are the resources of the task pods' helper containers
 	// (copy-tools, stage-in); the zero value sets none. See ParseHelperResources.
 	HelperResources corev1.ResourceRequirements
+	// TaskStorageURL, if set, returns the storage gateway URL through which
+	// a task's pods reach its objects; they then get no S3 credentials. See
+	// internal/isolation.
+	TaskStorageURL func(taskID string) string
 }
 
 // buildJobSpec creates a K8s Job spec from a TES task.
@@ -170,6 +174,9 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 		},
 	}
 
+	// How the filer reaches object storage.
+	storageEnv, storageCredentials := taskStorageEnv(task, cfg)
+
 	// Build pod affinity for RWO co-location (nil for other modes).
 	affinity := ws.TaskAffinity(task.Workspace, task.RunID)
 
@@ -220,12 +227,9 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 								"/tools/conquest", "filer", "stage-in",
 								"--manifest", "/stage/manifest.json",
 							},
-							Env: append(append([]corev1.EnvVar{
-								{Name: "CONQUEST_S3_ENDPOINT", Value: cfg.S3Endpoint},
-								{Name: "CONQUEST_S3_BUCKET", Value: cfg.S3Bucket},
-								{Name: "CONQUEST_S3_REGION", Value: cfg.S3Region},
-								{Name: "STAGE_MANIFEST", Value: string(manifestJSON)},
-							}, sharedWorkspaceEnv...), awsSecretEnvVars(cfg.StorageSecretName)...),
+							Env: append(append(append(append([]corev1.EnvVar{}, storageEnv...),
+								corev1.EnvVar{Name: "STAGE_MANIFEST", Value: string(manifestJSON)},
+							), sharedWorkspaceEnv...), storageCredentials...),
 							VolumeMounts: append(append([]corev1.VolumeMount{}, workdirMounts...),
 								corev1.VolumeMount{Name: "stage-manifest", MountPath: "/stage"},
 								corev1.VolumeMount{Name: "tools", MountPath: "/tools"},
@@ -248,11 +252,8 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 								append(
 									append([]corev1.EnvVar{}, envVars...),
 									corev1.EnvVar{Name: "STAGE_MANIFEST", Value: string(manifestJSON)},
-									corev1.EnvVar{Name: "CONQUEST_S3_ENDPOINT", Value: cfg.S3Endpoint},
-									corev1.EnvVar{Name: "CONQUEST_S3_BUCKET", Value: cfg.S3Bucket},
-									corev1.EnvVar{Name: "CONQUEST_S3_REGION", Value: cfg.S3Region},
 								),
-								awsSecretEnvVars(cfg.StorageSecretName)...,
+								append(append([]corev1.EnvVar{}, storageEnv...), storageCredentials...)...,
 							),
 							Resources: execResources,
 							VolumeMounts: append(append([]corev1.VolumeMount{}, workdirMounts...),

@@ -32,6 +32,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/controller"
 	"github.com/anuragxxd/conquest/internal/dispatcher"
 	"github.com/anuragxxd/conquest/internal/filer"
+	"github.com/anuragxxd/conquest/internal/isolation"
 	"github.com/anuragxxd/conquest/internal/objstore"
 	"github.com/anuragxxd/conquest/internal/reconciler"
 	"github.com/anuragxxd/conquest/internal/repository/pg"
@@ -197,6 +198,17 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("CONQUEST_TASK_HELPER_RESOURCES: %w", err)
 	}
 
+	// Storage gateway: created here with storage isolation, which local task
+	// pods need; otherwise below, only for remote endpoints.
+	var gateway *storagegw.Gateway
+	var gatewayStore remote.Storage
+	if cfg.StorageIsolation {
+		gateway, gatewayStore, err = newStorageGateway(cfg, layout, taskStore, log)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Try to create K8s backend (only works inside a K8s cluster).
 	var taskBackend *k8sbackend.Backend
 	var clientset kubernetes.Interface
@@ -221,6 +233,11 @@ func run(log *slog.Logger) error {
 			Workspace:         wsCfg,
 			PodSecurity:       podSecurity,
 			HelperResources:   helperResources,
+		}
+		if gateway != nil && cfg.StorageIsolation {
+			backendCfg.TaskStorageURL = func(taskID string) string {
+				return gateway.TaskRoot(cfg.InternalBaseURL, taskID)
+			}
 		}
 		taskBackend = k8sbackend.NewBackend(clientset, backendCfg, log)
 		log.Info("k8s backend enabled",
@@ -253,7 +270,6 @@ func run(log *slog.Logger) error {
 	// Task backend: the local Kubernetes backend, wrapped in the routing
 	// backend when remote TES endpoints are configured.
 	var tasks backend.TaskBackend
-	var gateway *storagegw.Gateway
 	gatewayID := ""
 	if taskBackend != nil {
 		tasks = taskBackend
@@ -262,12 +278,17 @@ func run(log *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			gw, storage, err := newStorageGateway(cfg, taskStore, log)
-			if err != nil {
-				return err
+			if gateway == nil {
+				gateway, gatewayStore, err = newStorageGateway(cfg, layout, taskStore, log)
+				if err != nil {
+					return err
+				}
 			}
-			gateway = gw
-			tasks, err = routing.New(fedCfg, taskBackend, runStore, cfg.S3Bucket, storage, log)
+			fedStorage := gatewayStore
+			if cfg.StorageGatewayURL == "" {
+				fedStorage = nil // isolation only: no URLs remote endpoints can reach
+			}
+			tasks, err = routing.New(fedCfg, taskBackend, runStore, cfg.S3Bucket, fedStorage, log)
 			if err != nil {
 				return err
 			}
@@ -426,10 +447,15 @@ func (g gatewayStorage) ListPrefix(ctx context.Context, bucket, prefix string) (
 }
 
 // newStorageGateway creates the storage gateway if CONQUEST_STORAGE_GATEWAY_URL
-// is set; otherwise it returns nils.
-func newStorageGateway(cfg *config.Config, tasks storagegw.TaskLookup, log *slog.Logger) (*storagegw.Gateway, remote.Storage, error) {
-	if cfg.StorageGatewayURL == "" {
+// is set or storage isolation is on; otherwise it returns nils.
+func newStorageGateway(cfg *config.Config, layout storage.Layout, tasks storagegw.TaskLookup, log *slog.Logger) (*storagegw.Gateway, remote.Storage, error) {
+	if cfg.StorageGatewayURL == "" && !cfg.StorageIsolation {
 		return nil, nil, nil
+	}
+	publicURL := cfg.StorageGatewayURL
+	if publicURL == "" {
+		// only local task pods use it, on their own address (TaskRoot)
+		publicURL = cfg.InternalBaseURL
 	}
 	accessKey := strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
 	secretKey := strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY"))
@@ -458,12 +484,17 @@ func newStorageGateway(cfg *config.Config, tasks storagegw.TaskLookup, log *slog
 		return nil, nil, fmt.Errorf("storage gateway S3 client: %w", err)
 	}
 	gw, err := storagegw.New(storagegw.Config{
-		PublicURL: cfg.StorageGatewayURL,
+		PublicURL: publicURL,
 		Secret:    []byte(cfg.StorageGatewaySecret),
 		Buckets:   []string{cfg.S3Bucket},
 	}, tasks, presigner, log)
 	if err != nil {
 		return nil, nil, err
+	}
+	if cfg.StorageIsolation {
+		gw.SetBound(isolation.RunBound(layout))
+		gw.SetLister(lister)
+		log.Info("storage isolation enabled: task pods get no S3 credentials", "gateway_url", cfg.InternalBaseURL, "s3_presign_endpoint", public)
 	}
 	log.Info("storage gateway enabled", "public_url", cfg.StorageGatewayURL, "s3_public_endpoint", public)
 	return gw, gatewayStorage{Gateway: gw, lister: lister}, nil

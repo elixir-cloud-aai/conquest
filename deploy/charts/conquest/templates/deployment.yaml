@@ -235,6 +235,12 @@ spec:
             {{- if .Values.storageGateway.enabled }}
             - name: CONQUEST_STORAGE_GATEWAY_URL
               value: {{ required "storageGateway.publicURL is required" .Values.storageGateway.publicURL | quote }}
+            {{- end }}
+            {{- if .Values.storageIsolation.enabled }}
+            - name: CONQUEST_STORAGE_ISOLATION
+              value: "true"
+            {{- end }}
+            {{- if or .Values.storageGateway.enabled .Values.storageIsolation.enabled }}
             - name: CONQUEST_STORAGE_GATEWAY_SECRET
               valueFrom:
                 secretKeyRef:

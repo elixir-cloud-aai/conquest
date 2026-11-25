@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/anuragxxd/conquest/internal/isolation"
 	"github.com/anuragxxd/conquest/internal/objstore"
 	"github.com/anuragxxd/conquest/internal/sharedfs"
 )
@@ -62,7 +63,10 @@ func ExecAndStageOut(ctx context.Context, manifestJSON string, command []string,
 
 	// Build S3 client.
 	var client objstore.Client
-	if manifestNeedsObjectStoreForStageOut(manifest) {
+	if gw, ok := isolation.ClientFromEnv(); ok && manifestNeedsObjectStoreForStageOut(manifest) {
+		// Without S3 credentials: through the storage gateway.
+		client = gw
+	} else if manifestNeedsObjectStoreForStageOut(manifest) {
 		endpoint := os.Getenv("CONQUEST_S3_ENDPOINT")
 		accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
 		secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
