@@ -119,6 +119,10 @@ conquest:
       type: RuntimeDefault
 
   replicaCount: 1
+  # Deployment strategy; empty: Kubernetes' default (RollingUpdate). Use
+  # {type: Recreate} for an upgrade that switches authentication on or
+  # changes its rules, so that no old pod serves meanwhile.
+  strategy: {}
 
   env:
     CONQUEST_HTTP_ADDR: ":8080"
