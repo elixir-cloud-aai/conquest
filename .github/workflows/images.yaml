@@ -53,6 +53,8 @@ jobs:
   # Decide whether the runtime bases need rebuilding.
   # ---------------------------------------------------------------------------
   changes:
+    # Docker Hub credentials exist only upstream; forks publish with ghcr.yaml
+    if: github.repository == 'anuragxxd/conquest'
     runs-on: ubuntu-latest
     outputs:
       nf_runtime: ${{ steps.filter.outputs.nf_runtime }}
@@ -159,7 +161,7 @@ jobs:
     needs: [changes, nf-runtime]
     # Proceed when the runtime built, or when it was skipped because nothing
     # about it changed. Never proceed if it actually failed.
-    if: ${{ !cancelled() && (needs.nf-runtime.result == 'success' || needs.nf-runtime.result == 'skipped') }}
+    if: ${{ github.repository == 'anuragxxd/conquest' && !cancelled() && (needs.nf-runtime.result == 'success' || needs.nf-runtime.result == 'skipped') }}
     environment: master
     runs-on: ubuntu-latest
     strategy:
@@ -214,6 +216,7 @@ jobs:
   # Server, WDL and Snakemake images: public bases, no dependency on the above.
   # ---------------------------------------------------------------------------
   multiarch:
+    if: github.repository == 'anuragxxd/conquest'
     environment: master
     runs-on: ubuntu-latest
     strategy:
