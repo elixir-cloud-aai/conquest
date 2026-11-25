@@ -123,8 +123,9 @@ refuses such pods (`must specify limits.cpu for: copy-tools,stage-in`): set
 `resources`, e.g.
 `{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"500m","memory":"256Mi"}}`
 (chart: `conquest.taskHelperResources`; the chart's `migrate` init container
-takes `conquest.migration.resources`). Conquest refuses to start if the value
-isn't valid.
+takes `conquest.migration.resources`, the objectfs CSI driver containers
+`objectfs.resources`). Conquest refuses to start if the value
+isn't valid (only `cpu`, `memory` and `ephemeral-storage` are accepted).
 
 ## Workspace Modes
 
@@ -473,7 +474,7 @@ No config files.
 | `CONQUEST_POD_SECURITY`             | `restricted`         | `restricted` or `baseline`        |
 | `CONQUEST_POD_RUN_AS_USER`          | `1000`               | UID for runner/task containers    |
 | `CONQUEST_POD_RUN_AS_GROUP`         | `1000`               | GID and fsGroup for those pods    |
-| `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Resources of task init containers (JSON) |
+| `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Task init container resources     |
 | `CONQUEST_RECONCILER_INTERVAL`      | `5s`                 | How often reconcilers poll K8s    |
 | `CONQUEST_ASYNC_DISPATCH`           | `true`               | Submit TES tasks in the background |
 | `CONQUEST_DISPATCH_WORKERS`         | `8`                  | Task submissions in parallel      |
@@ -515,7 +516,8 @@ only) and to the GitHub Container Registry of the repository's owner
 (`ghcr.io/<owner>/*`, `.github/workflows/ghcr.yaml`, also in forks), tagged
 `sha-<short commit>`. The GHCR images (linux/amd64) are scanned with Trivy,
 signed with cosign (keyless) and carry build provenance attestations; pin
-them by digest. The workflow's header shows how to verify them.
+them by digest. GHCR has `sha-*` tags only (no `latest` or version tags yet).
+The workflow's header shows how to verify them.
 
 ## Design Decisions
 
