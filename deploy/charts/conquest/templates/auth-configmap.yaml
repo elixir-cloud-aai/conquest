@@ -1,0 +1,16 @@
+{{- if .Values.auth.enabled }}
+{{- if not .Values.auth.config.issuers }}
+{{- fail "auth.config.issuers is required when auth.enabled is true" }}
+{{- end }}
+# Token authentication (internal/auth): issuers, audiences, service clients
+# and the create rule. A ConfigMap: it holds identifiers, never secrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "conquest.fullname" . }}-auth
+  labels:
+    app: {{ .Values.conquest.appname }}
+data:
+  config.yaml: |
+{{ toYaml .Values.auth.config | indent 4 }}
+{{- end }}

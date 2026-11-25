@@ -458,8 +458,8 @@ The entitlements must be ones the issuer releases at userinfo for the
 front ends' clients (an IdP may release them only there, not in access
 tokens).
 
-The Helm chart can't switch authentication on yet (the environment
-variables and the config file mount come in a follow-up).
+With the Helm chart, set `auth.enabled` and `auth.config` (see
+[Securing a deployment with the chart](#securing-a-deployment-with-the-chart)).
 
 The runner callback API (`/internal/runs/...`) has no authentication yet
 and reaches every task. Keep it off any public route: expose only
@@ -743,6 +743,53 @@ make docker-all             # Everything
 
 The Helm chart at `deploy/charts/conquest/` includes RBAC, init-container DB
 migrations, health probes, and a non-root security context.
+
+### Securing a deployment with the chart
+
+Both settings below are off by default; turn them on for any deployment
+that others can reach.
+
+- **Token authentication** (see Authentication): `auth.enabled: true` sets
+  `CONQUEST_AUTH_ENABLED`, `auth.serviceInfoPublic` (default `true`) sets
+  `CONQUEST_AUTH_SERVICE_INFO_PUBLIC`, and `auth.config` is rendered
+  verbatim (snake_case keys, as in the Authentication section) into the
+  ConfigMap `<conquest.appname>-auth` (default `conquest-auth`), mounted at `/etc/conquest/auth/config.yaml`
+  (`CONQUEST_AUTH_CONFIG`). A checksum annotation restarts the server when
+  the config changes. `auth.config.issuers` is required when enabled
+  (`helm template` fails without it), and the server refuses to start
+  without `create.entitlements` or at least one service client.
+- **Storage isolation** (see Storage Isolation): `storageIsolation.enabled:
+  true` keeps S3 credentials out of task pods.
+  Runner pods still get the bucket-wide S3 credentials (see Storage
+  Isolation, "Not covered"): workflow code in a runner can read and write
+  every run's objects in the bucket. Until that is fixed, let only trusted
+  callers create runs (`create.entitlements`), process only data that
+  isn't sensitive, and tell users about this limit.
+- **Routes**: the chart creates no Ingress or HTTPRoute. Route publicly
+  only what callers outside the cluster need: `/ga4gh/wes/v1/` for
+  workflow submitters and, with remote TES endpoints
+  (`storageGateway.enabled`), the storage gateway's `/storage/v1/t/`.
+  Keep `/ga4gh/tes/`, `/internal/` and the probes off public routes.
+
+```yaml
+auth:
+  enabled: true
+  config:
+    issuers:
+      - url: https://login.example.org/oidc/    # exactly as in iss
+        audiences: [<front-end client ID>]
+        service_clients:                        # optional
+          - client_id: <client ID>
+    create:
+      entitlements: [<exact entitlement>]
+storageIsolation:
+  enabled: true
+```
+
+Upgrading: drain active runs before switching authentication on (see
+Authentication), and set `conquest.strategy: {type: Recreate}` for that
+upgrade: with the default rolling update, old pods keep serving without
+authentication (or without the new create rule) until they are replaced.
 
 CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository
