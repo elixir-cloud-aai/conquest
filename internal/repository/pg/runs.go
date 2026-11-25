@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/anuragxxd/conquest/internal/domain"
+	"github.com/anuragxxd/conquest/internal/ownership"
 	"github.com/anuragxxd/conquest/internal/repository"
 )
 
@@ -26,7 +27,16 @@ func NewRunStore(pool *pgxpool.Pool) *RunStore {
 	return &RunStore{pool: pool}
 }
 
+// Create persists a new run. In a context scoped to an owner (package
+// ownership), the run is stamped with that owner, whatever run.Owner says.
 func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
+	if owner, ok := ownership.FromContext(ctx); ok {
+		run.Owner, run.AuthContext = owner.ID, owner.Context
+	}
+	var owner *string
+	if run.Owner != "" {
+		owner = &run.Owner
+	}
 	wsKind, wsClaim, wsAccess, wsPV := flattenWorkspaceBinding(run.Workspace)
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO runs (
@@ -37,15 +47,15 @@ func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
 			backend_ref, backend_state,
 			created_at, updated_at, started_at, finished_at, error_summary,
 			workspace_kind, workspace_claim_name, workspace_access_mode,
-			workspace_pv_name
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+			workspace_pv_name, owner, auth_context
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
 		run.RunID, run.WorkflowType, run.WorkflowTypeVersion,
 		run.WorkflowEngine, run.WorkflowEngineVersion,
 		string(run.State), run.RequestPayload, run.ResolvedWorkflowRef,
 		run.OutputPrefix, run.LayoutVersion, run.RunRootURI,
 		run.BackendRef, run.BackendState,
 		run.CreatedAt, run.UpdatedAt, run.StartedAt, run.FinishedAt, run.ErrorSummary,
-		wsKind, wsClaim, wsAccess, wsPV,
+		wsKind, wsClaim, wsAccess, wsPV, owner, run.AuthContext,
 	)
 	return err
 }
@@ -58,14 +68,15 @@ const runColumns = `run_id, workflow_type, workflow_type_version,
 	backend_ref, backend_state,
 	created_at, updated_at, started_at, finished_at, error_summary,
 	workspace_kind, workspace_claim_name, workspace_access_mode,
-	workspace_pv_name`
+	workspace_pv_name, owner, auth_context`
 
 // scanRunFields scans a row into a Run using the canonical column order.
 func scanRunFields(s interface{ Scan(dest ...any) error }) (*domain.Run, error) {
 	r := &domain.Run{}
 	var stateStr string
 	var payload, backendState []byte
-	var wsKind, wsClaim, wsAccess, wsPV *string
+	var wsKind, wsClaim, wsAccess, wsPV, owner *string
+	var authContext []byte
 	err := s.Scan(
 		&r.RunID, &r.WorkflowType, &r.WorkflowTypeVersion,
 		&r.WorkflowEngine, &r.WorkflowEngineVersion,
@@ -73,7 +84,7 @@ func scanRunFields(s interface{ Scan(dest ...any) error }) (*domain.Run, error) 
 		&r.OutputPrefix, &r.LayoutVersion, &r.RunRootURI,
 		&r.BackendRef, &backendState,
 		&r.CreatedAt, &r.UpdatedAt, &r.StartedAt, &r.FinishedAt, &r.ErrorSummary,
-		&wsKind, &wsClaim, &wsAccess, &wsPV,
+		&wsKind, &wsClaim, &wsAccess, &wsPV, &owner, &authContext,
 	)
 	if err != nil {
 		return nil, err
@@ -86,12 +97,19 @@ func scanRunFields(s interface{ Scan(dest ...any) error }) (*domain.Run, error) 
 		r.BackendState = json.RawMessage(backendState)
 	}
 	r.Workspace = inflateWorkspaceBinding(wsKind, wsClaim, wsAccess, wsPV)
+	if owner != nil {
+		r.Owner = *owner
+	}
+	if authContext != nil {
+		r.AuthContext = json.RawMessage(authContext)
+	}
 	return r, nil
 }
 
 func (s *RunStore) Get(ctx context.Context, runID string) (*domain.Run, error) {
+	filter, args := runOwnerFilter(ctx, 2)
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+runColumns+` FROM runs WHERE run_id = $1`, runID)
+		`SELECT `+runColumns+` FROM runs WHERE run_id = $1`+filter, append([]any{runID}, args...)...)
 	r, err := scanRunFields(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -104,8 +122,9 @@ func (s *RunStore) Get(ctx context.Context, runID string) (*domain.Run, error) {
 
 func (s *RunStore) GetStatus(ctx context.Context, runID string) (domain.State, error) {
 	var stateStr string
+	filter, args := runOwnerFilter(ctx, 2)
 	err := s.pool.QueryRow(ctx,
-		`SELECT state FROM runs WHERE run_id = $1`, runID,
+		`SELECT state FROM runs WHERE run_id = $1`+filter, append([]any{runID}, args...)...,
 	).Scan(&stateStr)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
@@ -125,20 +144,23 @@ func (s *RunStore) List(ctx context.Context, page repository.Page) (*repository.
 	var err error
 
 	if page.Token == "" {
+		filter, args := runOwnerFilter(ctx, 2)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+runColumns+` FROM runs
+			WHERE TRUE`+filter+`
 			ORDER BY created_at DESC, run_id DESC
-			LIMIT $1`, limit+1)
+			LIMIT $1`, append([]any{limit + 1}, args...)...)
 	} else {
 		cursorTime, cursorID, parseErr := parseCursor(page.Token)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid page token: %w", parseErr)
 		}
+		filter, args := runOwnerFilter(ctx, 4)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+runColumns+` FROM runs
-			WHERE (created_at, run_id) < ($1, $2)
+			WHERE (created_at, run_id) < ($1, $2)`+filter+`
 			ORDER BY created_at DESC, run_id DESC
-			LIMIT $3`, cursorTime, cursorID, limit+1)
+			LIMIT $3`, append([]any{cursorTime, cursorID, limit + 1}, args...)...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)

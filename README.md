@@ -269,6 +269,18 @@ Conquest manages the full task lifecycle — data staging, resource allocation,
 state tracking, and log capture. The workflow engine submits tasks; Conquest
 handles the rest.
 
+### Run owners
+
+Every run can record the caller that created it (`runs.owner`, migration
+000009; package `internal/ownership`). When a request's context is scoped to
+an owner, new runs are stamped with that owner, and the repository returns
+only that owner's runs and their tasks: another owner's run or task, or one
+created without an owner, reads as not found. A context without an owner is
+unscoped, which is how Conquest behaves today: nothing sets an owner until
+authentication is configured, so existing deployments see no change.
+Internal callers (reconcilers, the dispatcher, the runner callback API) stay
+unscoped.
+
 ## Federation: Remote TES Endpoints
 
 Conquest can send individual tasks to other GA4GH TES servers (Funnel, TESK,
@@ -453,6 +465,15 @@ layout paths, adapter logic, reconciler behavior, and more.
 ```bash
 make test          # go test -v -race -count=1 ./...
 make test-short    # go test -short -race ./...
+```
+
+The PostgreSQL repository tests carry the build tag `integration` and need a
+migrated database (CI runs them in the `Integration tests` job, which also
+rolls the newest migration back and forth):
+
+```bash
+migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" up
+CONQUEST_TEST_POSTGRES_DSN=postgres://... go test -tags integration ./internal/repository/pg/
 ```
 
 ## Configuration
