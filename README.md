@@ -445,8 +445,10 @@ create. Answers:
   (`timeout_seconds`), answers anything else than 200 with a JSON object,
   or isn't configured and can't be discovered (retried 10 seconds after a
   failed discovery). The userinfo request follows no redirects (a 3xx
-  answers 503), so the user's token goes only to the userinfo endpoint. This never affects reads: the userinfo endpoint is
-  discovered separately from the key set, on the first create.
+  answers 503), so the user's token goes only to the userinfo endpoint.
+
+Userinfo discovery is separate from the key set and happens on the first
+create, so its failure never affects reads.
 
 The entitlements must be ones the issuer releases at userinfo for the
 front ends' clients (an IdP may release them only there, not in access

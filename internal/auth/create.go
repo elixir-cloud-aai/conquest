@@ -87,7 +87,7 @@ func entitlements(info map[string]json.RawMessage, claim string) []string {
 // token (401, 403) is errUserinfoRefused; an endpoint that can't be reached,
 // times out or doesn't answer 200 with a JSON object is errUnavailable.
 func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.RawMessage, error) {
-	endpoint, err := i.userinfoEndpoint(ctx)
+	endpoint, err := i.userinfoEndpoint()
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +119,10 @@ func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.Ra
 // userinfoEndpoint returns the configured userinfo endpoint or the one named
 // by the issuer's discovery document. Discovery happens on the first create
 // and is retried discoveryRetry after a failure; it never affects token
-// validation, so reads keep working when it fails.
-func (i *issuer) userinfoEndpoint(ctx context.Context) (string, error) {
+// validation, so reads keep working when it fails. It runs on the issuer's
+// context, not the request's, so a caller who goes away can't cause a
+// failure that other callers would then get.
+func (i *issuer) userinfoEndpoint() (string, error) {
 	if i.cfg.UserinfoURI != "" {
 		return i.cfg.UserinfoURI, nil
 	}
@@ -132,7 +134,7 @@ func (i *issuer) userinfoEndpoint(ctx context.Context) (string, error) {
 	case !i.userinfoLastTry.IsZero() && time.Since(i.userinfoLastTry) < discoveryRetry:
 		return "", i.userinfoErr
 	}
-	endpoint, err := i.discoverUserinfo(ctx)
+	endpoint, err := i.discoverUserinfo(i.ctx)
 	i.userinfoLastTry = time.Now()
 	if err != nil {
 		i.userinfoErr = fmt.Errorf("%w: issuer %s: %v", errUnavailable, i.cfg.URL, err)
@@ -142,6 +144,8 @@ func (i *issuer) userinfoEndpoint(ctx context.Context) (string, error) {
 	return endpoint, nil
 }
 
+// discoverUserinfo reads userinfo_endpoint from the discovery document; it
+// must be named and pass checkURL.
 func (i *issuer) discoverUserinfo(ctx context.Context) (string, error) {
 	doc, err := i.discover(ctx)
 	if err != nil {

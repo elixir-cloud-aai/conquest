@@ -362,7 +362,8 @@ func TestMiddleware_CreateUserinfoRedirectNotFollowed(t *testing.T) {
 // A discovery document without userinfo_endpoint is asked again after the
 // retry delay: a briefly broken IdP doesn't block creates until a restart.
 func TestMiddleware_CreateUserinfoDiscoveryRetried(t *testing.T) {
-	defer func(d time.Duration) { discoveryRetry = d }(discoveryRetry)
+	saved := discoveryRetry
+	t.Cleanup(func() { discoveryRetry = saved })
 	discoveryRetry = 0
 	idp := newTestIdP(t)
 	idp.noUserinfo = true
