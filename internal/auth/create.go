@@ -7,18 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
-// Who may create runs and tasks (the submit rule): a listed service client,
-// or a user whose entitlements, as the issuer's userinfo endpoint releases
-// them for the request's own token, contain one of the configured values.
-// Entitlements are compared as exact strings, never as prefixes. Only
-// creates check them: reading and cancelling own runs needs no entitlement,
-// so a former member keeps access to their runs and an IdP outage doesn't
-// block it. Nothing is cached, so a revoked entitlement takes effect on the
-// next create.
-
-// CreateConfig is who may create runs and tasks.
+// CreateConfig is who may create runs and tasks (the create rule; README:
+// Authentication).
 type CreateConfig struct {
 	// Entitlements are the values, one of which a user must hold to create.
 	// Empty: only listed service clients create.
@@ -51,10 +44,7 @@ func (a *Authenticator) authorizeCreate(r *http.Request, p *Principal) error {
 	if len(a.entitlements) == 0 {
 		return fmt.Errorf("%w: no entitlements configured, only service clients create", errForbidden)
 	}
-	iss, ok := a.issuers[p.Issuer]
-	if !ok { // Authenticate accepted the token, so this can't happen
-		return fmt.Errorf("untrusted issuer %q", truncate(p.Issuer, 256))
-	}
+	iss := a.issuers[p.Issuer] // Authenticate accepted the issuer
 	token, err := bearerToken(r)
 	if err != nil {
 		return err
@@ -65,7 +55,7 @@ func (a *Authenticator) authorizeCreate(r *http.Request, p *Principal) error {
 	}
 	var sub string
 	if err := json.Unmarshal(info["sub"], &sub); err != nil || sub != p.Subject {
-		return fmt.Errorf("userinfo sub does not match the token's sub")
+		return fmt.Errorf("%w: userinfo sub does not match the token's sub", errUserinfoRefused)
 	}
 	for _, e := range entitlements(info, a.entitlementClaim) {
 		if a.entitlements[e] {
@@ -97,11 +87,9 @@ func entitlements(info map[string]json.RawMessage, claim string) []string {
 // token (401, 403) is errUserinfoRefused; an endpoint that can't be reached,
 // times out or doesn't answer 200 with a JSON object is errUnavailable.
 func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.RawMessage, error) {
-	i.mu.Lock()
-	endpoint := i.userinfoURI
-	i.mu.Unlock()
-	if endpoint == "" {
-		return nil, fmt.Errorf("%w: issuer %s: no userinfo endpoint configured or discovered", errUnavailable, i.cfg.URL)
+	endpoint, err := i.userinfoEndpoint(ctx)
+	if err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -109,7 +97,7 @@ func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.Ra
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	resp, err := i.client.Do(req)
+	resp, err := i.userinfoClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: userinfo: %v", errUnavailable, err)
 	}
@@ -126,4 +114,44 @@ func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.Ra
 		return nil, fmt.Errorf("%w: userinfo: not a JSON object", errUnavailable)
 	}
 	return info, nil
+}
+
+// userinfoEndpoint returns the configured userinfo endpoint or the one named
+// by the issuer's discovery document. Discovery happens on the first create
+// and is retried discoveryRetry after a failure; it never affects token
+// validation, so reads keep working when it fails.
+func (i *issuer) userinfoEndpoint(ctx context.Context) (string, error) {
+	if i.cfg.UserinfoURI != "" {
+		return i.cfg.UserinfoURI, nil
+	}
+	i.userinfoMu.Lock()
+	defer i.userinfoMu.Unlock()
+	switch {
+	case i.userinfoURI != "":
+		return i.userinfoURI, nil
+	case !i.userinfoLastTry.IsZero() && time.Since(i.userinfoLastTry) < discoveryRetry:
+		return "", i.userinfoErr
+	}
+	endpoint, err := i.discoverUserinfo(ctx)
+	i.userinfoLastTry = time.Now()
+	if err != nil {
+		i.userinfoErr = fmt.Errorf("%w: issuer %s: %v", errUnavailable, i.cfg.URL, err)
+		return "", i.userinfoErr
+	}
+	i.userinfoURI = endpoint
+	return endpoint, nil
+}
+
+func (i *issuer) discoverUserinfo(ctx context.Context) (string, error) {
+	doc, err := i.discover(ctx)
+	if err != nil {
+		return "", err
+	}
+	if doc.UserinfoEndpoint == "" {
+		return "", fmt.Errorf("discovery names no userinfo_endpoint")
+	}
+	if err := checkURL("discovered userinfo_endpoint", doc.UserinfoEndpoint); err != nil {
+		return "", err
+	}
+	return doc.UserinfoEndpoint, nil
 }

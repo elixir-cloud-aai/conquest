@@ -25,7 +25,7 @@ type Config struct {
 	// set fetches, userinfo requests (default 10, at most 10).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 	// Create is who may create runs and tasks.
-	Create CreateConfig `json:"create,omitempty"`
+	Create CreateConfig `json:"create"`
 }
 
 // IssuerConfig is one trusted token issuer.
@@ -188,7 +188,7 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// validate checks the submit rule and fills in defaults.
+// validate checks the create rule and fills in defaults.
 func (c *CreateConfig) validate(anyServiceClient bool) error {
 	if c.EntitlementClaim == "" {
 		c.EntitlementClaim = defaultEntitlementClaim

@@ -88,8 +88,10 @@ func userinfoFor(sub string, entitlements any) map[string]any {
 	return c
 }
 
-// TestMiddleware_Create covers the submit rows of the authorisation
-// matrix (gi#18 design, section 3: rows 2-4, 6, 7, 12, 13). 418 stands for
+// TestMiddleware_Create covers the create rule: users with and without an
+// entitlement, former members reading, listed and unlisted service
+// clients, and userinfo answers that refuse the token or are unusable.
+// Token validation itself is covered in auth_test.go. 418 stands for
 // "passed to the handler".
 func TestMiddleware_Create(t *testing.T) {
 	idp := newTestIdP(t)
@@ -118,46 +120,48 @@ func TestMiddleware_Create(t *testing.T) {
 		want      int
 		wantCalls int
 	}{
-		{"row 2: user without the entitlement", http.MethodPost, user("alice"),
+		{"user without the entitlement", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", []string{notEntitled}), http.StatusForbidden, 1},
-		{"row 2: user without any entitlement", http.MethodPost, user("alice"),
+		{"user without any entitlement", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", nil), http.StatusForbidden, 1},
-		{"row 2: prefix of the entitlement", http.MethodPost, user("alice"),
+		{"prefix of the entitlement", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", []string{strings.Split(entitled, "#")[0]}), http.StatusForbidden, 1},
-		{"row 2: entitlement with a suffix", http.MethodPost, user("alice"),
+		{"entitlement with a suffix", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", []string{entitled + ":sub"}), http.StatusForbidden, 1},
-		{"row 2: entitlement claim of another type", http.MethodPost, user("alice"),
+		{"entitlement claim of another type", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", 42), http.StatusForbidden, 1},
-		{"row 2: user without the entitlement lists", http.MethodGet, user("alice"),
+		{"user without the entitlement lists", http.MethodGet, user("alice"),
 			0, "", userinfoFor("alice", nil), http.StatusTeapot, 0},
-		{"row 3: member", http.MethodPost, user("alice"),
+		{"member", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", []string{notEntitled, entitled}), http.StatusTeapot, 1},
-		{"row 3: member, claim as a single string", http.MethodPost, user("alice"),
+		{"member, claim as a single string", http.MethodPost, user("alice"),
 			0, "", userinfoFor("alice", entitled), http.StatusTeapot, 1},
-		{"row 4: former member reads", http.MethodGet, user("alice"),
+		{"former member reads", http.MethodGet, user("alice"),
 			0, "", userinfoFor("alice", nil), http.StatusTeapot, 0},
-		{"row 6: listed service client creates", http.MethodPost, service(),
+		{"listed service client creates", http.MethodPost, service(),
 			http.StatusForbidden, "", nil, http.StatusTeapot, 0},
-		{"row 7: unlisted service client creates", http.MethodPost, unlisted(),
+		{"unlisted service client creates", http.MethodPost, unlisted(),
 			0, "", userinfoFor("other-client", []string{entitled}), http.StatusForbidden, 0},
-		{"row 7: unlisted service client lists", http.MethodGet, unlisted(),
+		{"unlisted service client lists", http.MethodGet, unlisted(),
 			0, "", nil, http.StatusTeapot, 0},
-		{"row 12: userinfo 5xx", http.MethodPost, user("alice"),
+		{"userinfo 5xx", http.MethodPost, user("alice"),
 			http.StatusBadGateway, "", nil, http.StatusServiceUnavailable, 1},
-		{"row 12: userinfo not JSON", http.MethodPost, user("alice"),
+		{"userinfo not JSON", http.MethodPost, user("alice"),
 			0, "<html>", nil, http.StatusServiceUnavailable, 1},
-		{"row 12: userinfo JSON but not an object", http.MethodPost, user("alice"),
+		{"userinfo JSON but not an object", http.MethodPost, user("alice"),
 			0, `["sub"]`, nil, http.StatusServiceUnavailable, 1},
-		{"row 12: userinfo redirect", http.MethodPost, user("alice"),
+		{"userinfo redirect", http.MethodPost, user("alice"),
 			http.StatusFound, "", nil, http.StatusServiceUnavailable, 1},
-		{"row 13: userinfo 401", http.MethodPost, user("alice"),
+		{"userinfo 401", http.MethodPost, user("alice"),
 			http.StatusUnauthorized, "", nil, http.StatusUnauthorized, 1},
-		{"row 13: userinfo 403", http.MethodPost, user("alice"),
+		{"userinfo 403", http.MethodPost, user("alice"),
 			http.StatusForbidden, "", nil, http.StatusUnauthorized, 1},
 		{"userinfo names another sub", http.MethodPost, user("alice"),
 			0, "", userinfoFor("mallory", []string{entitled}), http.StatusUnauthorized, 1},
 		{"userinfo without sub", http.MethodPost, user("alice"),
 			0, "", map[string]any{"eduperson_entitlement": []string{entitled}}, http.StatusUnauthorized, 1},
+		{"userinfo sub not a string", http.MethodPost, user("alice"),
+			0, "", map[string]any{"sub": 7, "eduperson_entitlement": []string{entitled}}, http.StatusUnauthorized, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -288,16 +292,30 @@ func TestAuthenticate_JWKSURIWithoutUserinfoURIDiscovers(t *testing.T) {
 	}
 }
 
-func TestMiddleware_CreateNoUserinfoEndpointIs503(t *testing.T) {
-	idp := newTestIdP(t)
-	idp.noUserinfo = true // discovery names no userinfo_endpoint
-	a := newCreateAuthenticator(t, idp)
-	token := idp.sign(t, idp.claimsFor("alice"))
-	if w := serveThrough(a, http.MethodGet, token); w.Code != http.StatusTeapot {
-		t.Fatalf("GET: status %d (reads need no userinfo)", w.Code)
-	}
-	if w := serveThrough(a, http.MethodPost, token); w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("POST: status %d, want 503", w.Code)
+// A userinfo endpoint that discovery doesn't name, or names with plain
+// http, fails creates (503) but never reads, also with a configured key set.
+func TestMiddleware_CreateUnusableUserinfoEndpointIs503(t *testing.T) {
+	for name, set := range map[string]func(*testIdP){
+		"missing":    func(i *testIdP) { i.noUserinfo = true },
+		"plain http": func(i *testIdP) { i.userinfoURL = "http://userinfo.example/" },
+	} {
+		for _, jwks := range []bool{false, true} {
+			idp := newTestIdP(t)
+			set(idp)
+			a := newCreateAuthenticator(t, idp, func(c *Config) {
+				if jwks {
+					c.Issuers[0].JWKSURI = idp.srv.URL + "/jwks"
+				}
+			})
+			idp.userinfo.set(0, "", userinfoFor("alice", []string{entitled}))
+			token := idp.sign(t, idp.claimsFor("alice"))
+			if w := serveThrough(a, http.MethodPost, token); w.Code != http.StatusServiceUnavailable {
+				t.Errorf("%s, jwks_uri %v: POST status %d, want 503", name, jwks, w.Code)
+			}
+			if w := serveThrough(a, http.MethodGet, token); w.Code != http.StatusTeapot {
+				t.Errorf("%s, jwks_uri %v: GET status %d (reads need no userinfo)", name, jwks, w.Code)
+			}
+		}
 	}
 }
 
@@ -320,5 +338,42 @@ func TestEntitlements(t *testing.T) {
 	}
 	if got := entitlements(map[string]json.RawMessage{}, "e"); got != nil {
 		t.Errorf("missing claim: %v", got)
+	}
+}
+
+// The userinfo request follows no redirects, so the user's token never
+// goes anywhere but the userinfo endpoint.
+func TestMiddleware_CreateUserinfoRedirectNotFollowed(t *testing.T) {
+	idp := newTestIdP(t)
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, idp.srv.URL+"/userinfo", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirect.Close)
+	a := newCreateAuthenticator(t, idp, func(c *Config) { c.Issuers[0].UserinfoURI = redirect.URL })
+	idp.userinfo.set(0, "", userinfoFor("alice", []string{entitled}))
+	if w := serveThrough(a, http.MethodPost, idp.sign(t, idp.claimsFor("alice"))); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", w.Code)
+	}
+	if calls, _ := idp.userinfo.stats(); calls != 0 {
+		t.Fatalf("redirect followed: target called %d times", calls)
+	}
+}
+
+// A discovery document without userinfo_endpoint is asked again after the
+// retry delay: a briefly broken IdP doesn't block creates until a restart.
+func TestMiddleware_CreateUserinfoDiscoveryRetried(t *testing.T) {
+	defer func(d time.Duration) { discoveryRetry = d }(discoveryRetry)
+	discoveryRetry = 0
+	idp := newTestIdP(t)
+	idp.noUserinfo = true
+	a := newCreateAuthenticator(t, idp)
+	idp.userinfo.set(0, "", userinfoFor("alice", []string{entitled}))
+	token := idp.sign(t, idp.claimsFor("alice"))
+	if w := serveThrough(a, http.MethodPost, token); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("without endpoint: status %d, want 503", w.Code)
+	}
+	idp.noUserinfo = false
+	if w := serveThrough(a, http.MethodPost, token); w.Code != http.StatusTeapot {
+		t.Fatalf("after the fix: status %d", w.Code)
 	}
 }

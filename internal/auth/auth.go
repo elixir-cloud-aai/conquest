@@ -101,19 +101,24 @@ type issuer struct {
 	cfg     IssuerConfig
 	clients map[string]bool
 	client  *http.Client
-	ctx     context.Context
-	log     *slog.Logger
+	// userinfoClient sends user tokens: it follows no redirects, so a
+	// token never goes to a URL other than the userinfo endpoint.
+	userinfoClient *http.Client
+	ctx            context.Context
+	log            *slog.Logger
 
-	// needUserinfo: creates ask the userinfo endpoint, so it is
-	// discovered unless configured.
-	needUserinfo bool
+	mu        sync.Mutex
+	keys      keyfunc.Keyfunc
+	resolving bool
+	lastTry   time.Time
+	lastError error
 
-	mu          sync.Mutex
-	keys        keyfunc.Keyfunc
-	userinfoURI string // configured or discovered; set with keys
-	resolving   bool
-	lastTry     time.Time
-	lastError   error
+	// The userinfo endpoint, discovered on the first create unless
+	// configured (create.go), independently of the key set.
+	userinfoMu      sync.Mutex
+	userinfoURI     string
+	userinfoLastTry time.Time
+	userinfoErr     error
 }
 
 // discoveryRetry is how long a failed discovery is not retried.
@@ -127,6 +132,10 @@ func New(ctx context.Context, cfg *Config, log *slog.Logger) (*Authenticator, er
 		return nil, err
 	}
 	client := &http.Client{Timeout: cfg.timeout(), CheckRedirect: checkRedirect}
+	userinfoClient := &http.Client{
+		Timeout:       cfg.timeout(),
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 	a := &Authenticator{
 		issuers: make(map[string]*issuer, len(cfg.Issuers)),
 		parser: jwt.NewParser(
@@ -148,8 +157,7 @@ func New(ctx context.Context, cfg *Config, log *slog.Logger) (*Authenticator, er
 			clients[sc.ClientID] = true
 		}
 		a.issuers[ic.URL] = &issuer{
-			cfg: ic, clients: clients, client: client, ctx: ctx, log: log,
-			needUserinfo: len(cfg.Create.Entitlements) > 0,
+			cfg: ic, clients: clients, client: client, userinfoClient: userinfoClient, ctx: ctx, log: log,
 		}
 	}
 	return a, nil
@@ -234,8 +242,9 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	return p, nil
 }
 
-// Middleware rejects requests without a valid bearer token, and creates
-// by callers not entitled to create, and scopes the others to their caller.
+// Middleware rejects requests without a valid bearer token, and creates by
+// callers who may not create (create.go). It scopes all other requests to
+// their caller.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.Public != nil && a.Public(r) {
@@ -256,10 +265,14 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// refuse answers a request that failed authentication or the submit rule.
+// refuse answers a request that failed authentication or the create rule.
 func (a *Authenticator) refuse(w http.ResponseWriter, r *http.Request, err error) {
 	// The cause goes to the log, never the token.
-	a.log.Info("request refused", "method", r.Method, "path", r.URL.Path, "err", err)
+	msg := "request not authenticated"
+	if errors.Is(err, errForbidden) {
+		msg = "create refused"
+	}
+	a.log.Info(msg, "method", r.Method, "path", r.URL.Path, "err", err)
 	switch {
 	case errors.Is(err, errUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "token validation temporarily unavailable")
@@ -344,7 +357,6 @@ func (i *issuer) keyfunc() (keys keyfunc.Keyfunc, err error) {
 	// The state is updated however resolve ends, a panic included, so
 	// that a failed attempt never leaves the issuer "being fetched".
 	err = errResolvePanicked
-	var userinfoURI string
 	defer func() {
 		i.mu.Lock()
 		defer i.mu.Unlock()
@@ -355,17 +367,16 @@ func (i *issuer) keyfunc() (keys keyfunc.Keyfunc, err error) {
 			keys, err = nil, i.lastError
 			return
 		}
-		i.keys, i.userinfoURI = keys, userinfoURI
+		i.keys = keys
 	}()
-	keys, userinfoURI, err = i.resolve()
+	keys, err = i.resolve()
 	return keys, err
 }
 
 var errResolvePanicked = errors.New("key set resolution panicked")
 
-// resolve discovers the issuer's key set and, if needed, userinfo endpoint
-// (unless configured) and fetches the key set.
-func (i *issuer) resolve() (keyfunc.Keyfunc, string, error) {
+// resolve discovers the issuer's key set (unless configured) and fetches it.
+func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
 	// The key set's background refresh runs on ctx: an attempt that fails
 	// stops it, so failed attempts leave no goroutines behind.
 	ctx, cancel := context.WithCancel(i.ctx)
@@ -376,25 +387,16 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, string, error) {
 		}
 	}()
 
-	jwksURI, userinfoURI := i.cfg.JWKSURI, i.cfg.UserinfoURI
-	if jwksURI == "" || (i.needUserinfo && userinfoURI == "") {
+	jwksURI := i.cfg.JWKSURI
+	if jwksURI == "" {
 		doc, err := i.discover(ctx)
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
-		if jwksURI == "" {
-			if err := checkURL("discovered jwks_uri", doc.JWKSURI); err != nil {
-				return nil, "", err
-			}
-			jwksURI = doc.JWKSURI
+		if err := checkURL("discovered jwks_uri", doc.JWKSURI); err != nil {
+			return nil, err
 		}
-		// A missing userinfo_endpoint fails creates only (503), not reads.
-		if i.needUserinfo && userinfoURI == "" && doc.UserinfoEndpoint != "" {
-			if err := checkURL("discovered userinfo_endpoint", doc.UserinfoEndpoint); err != nil {
-				return nil, "", err
-			}
-			userinfoURI = doc.UserinfoEndpoint
-		}
+		jwksURI = doc.JWKSURI
 	}
 	failFirst := false // a key set that can't be fetched is an error, retried later
 	keys, err := keyfunc.NewDefaultOverrideCtx(ctx, []string{jwksURI}, keyfunc.Override{
@@ -414,7 +416,7 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, string, error) {
 		},
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("key set: %w", err)
+		return nil, fmt.Errorf("key set: %w", err)
 	}
 	// Only signing keys (or keys that don't say) verify tokens.
 	kf, err := keyfunc.New(keyfunc.Options{
@@ -423,10 +425,10 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, string, error) {
 		UseWhitelist: []jwkset.USE{jwkset.UseSig, ""},
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	ok = true
-	return kf, userinfoURI, nil
+	return kf, nil
 }
 
 // discoveryDoc is the part of an OpenID Connect discovery document that

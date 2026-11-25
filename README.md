@@ -434,15 +434,23 @@ and tasks need a valid token only, so a caller whose entitlement is revoked
 keeps access to the runs they created, and an outage of the userinfo
 endpoint doesn't block them. Nothing is cached: every create asks the
 userinfo endpoint again, so a revoked entitlement takes effect on the next
-create. If the userinfo endpoint refuses the token (401 or 403), the create
-answers 401 with `WWW-Authenticate: Bearer error="invalid_token"`; if it
-can't be reached, times out (`timeout_seconds`), answers anything else
-than 200 or no JSON object, or no userinfo endpoint is configured or
-discovered, the create answers 503. The entitlements must be ones the
-issuer releases at userinfo for the front ends' clients (an IdP may
-release them only there, not in access tokens). When `jwks_uri` is set but
-`userinfo_uri` isn't and entitlements are configured, discovery is still
-used to find the userinfo endpoint.
+create. Answers:
+
+- 403 (body `forbidden`, the reason only in the log): no configured
+  entitlement, or a token of a client that isn't listed;
+- 401 with `WWW-Authenticate: Bearer error="invalid_token"`: the userinfo
+  endpoint refuses the token (401 or 403), or its `sub` is missing or
+  differs from the token's;
+- 503: the userinfo endpoint can't be reached, times out
+  (`timeout_seconds`), answers anything else than 200 with a JSON object,
+  or isn't configured and can't be discovered (retried 10 seconds after a
+  failed discovery). The userinfo request follows no redirects (a 3xx
+  answers 503), so the user's token goes only to the userinfo endpoint. This never affects reads: the userinfo endpoint is
+  discovered separately from the key set, on the first create.
+
+The entitlements must be ones the issuer releases at userinfo for the
+front ends' clients (an IdP may release them only there, not in access
+tokens).
 
 The Helm chart can't switch authentication on yet (the environment
 variables and the config file mount come in a follow-up).

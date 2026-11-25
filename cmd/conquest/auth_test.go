@@ -12,6 +12,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/anuragxxd/conquest/internal/api"
+	"github.com/anuragxxd/conquest/internal/api/tes"
+	"github.com/anuragxxd/conquest/internal/api/wes"
 	"github.com/anuragxxd/conquest/internal/config"
 )
 
@@ -78,8 +81,8 @@ func TestIsCreate(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}
 	r := chi.NewRouter()
+	// In a group, as in api.NewRouterWithAuth.
 	r.Group(func(r chi.Router) {
-		r.Use(func(next http.Handler) http.Handler { return next })
 		r.Post("/ga4gh/wes/v1/runs", ok)
 		r.Get("/ga4gh/wes/v1/runs", ok)
 		r.Post("/ga4gh/wes/v1/runs/{run_id}/cancel", ok)
@@ -110,5 +113,37 @@ func TestNewAuthMiddleware_BadConfigFails(t *testing.T) {
 	cfg := &config.Config{AuthEnabled: true, AuthConfigFile: filepath.Join(t.TempDir(), "missing.yaml")}
 	if _, err := newAuthMiddleware(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
 		t.Fatal("started without an auth config")
+	}
+}
+
+// Through the real router: the create rule sees exactly the two create
+// routes, and the runner callback routes never reach the auth middleware.
+func TestIsCreate_Router(t *testing.T) {
+	var seen, create bool
+	authn := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seen, create = true, isCreate(r)
+			w.WriteHeader(http.StatusTeapot) // the handlers are never called
+		})
+	}
+	router := api.NewRouterWithAuth(&wes.Handler{}, &tes.Handler{}, authn)
+	for _, tt := range []struct {
+		method, path  string
+		authn, create bool
+	}{
+		{http.MethodPost, "/ga4gh/wes/v1/runs", true, true},
+		{http.MethodPost, "/ga4gh/tes/v1/tasks", true, true},
+		{http.MethodGet, "/ga4gh/wes/v1/runs", true, false},
+		{http.MethodGet, "/ga4gh/tes/v1/tasks", true, false},
+		{http.MethodPost, "/ga4gh/wes/v1/runs/r1/cancel", true, false},
+		{http.MethodPost, "/ga4gh/tes/v1/tasks/t1:cancel", true, false},
+		{http.MethodPost, "/internal/runs/r1/ga4gh/tes/v1/tasks", false, false},
+	} {
+		seen, create = false, false
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(tt.method, tt.path, nil))
+		if seen != tt.authn || create != tt.create {
+			t.Errorf("%s %s: authn %v, create %v (status %d)", tt.method, tt.path, seen, create, w.Code)
+		}
 	}
 }
