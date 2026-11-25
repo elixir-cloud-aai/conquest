@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anuragxxd/conquest/internal/cors"
 	"github.com/anuragxxd/conquest/internal/runnerauth"
 	"github.com/anuragxxd/conquest/internal/storage"
 )
@@ -122,7 +123,33 @@ type Config struct {
 	// accepts only the token of the run in its path. Empty: that API is
 	// open, which AuthEnabled refuses.
 	RunnerSecret string
+
+	// CORSAllowedOrigins are the exact origins of browser front ends that
+	// may call the public WES and TES APIs (see internal/cors). Empty
+	// (default): no CORS headers.
+	CORSAllowedOrigins []string
+
+	// ServiceInfo holds the GA4GH service-info base fields WES
+	// service-info answers with; all empty (default): none.
+	ServiceInfo ServiceInfo
 }
+
+// ServiceInfo holds the GA4GH service-info base fields
+// (CONQUEST_SERVICE_INFO_*).
+type ServiceInfo struct {
+	ID               string
+	Name             string
+	Description      string
+	OrganizationName string
+	OrganizationURL  string
+	ContactURL       string
+	DocumentationURL string
+	Environment      string
+	Version          string
+}
+
+// IsZero reports whether no field is set.
+func (s ServiceInfo) IsZero() bool { return s == ServiceInfo{} }
 
 // defaultTaskMinRAMGb floors task memory at 128 MiB. Workflows compute memory
 // from input sizes (nf-core/sarek gives BWAMEM1_INDEX 244 KB for its test
@@ -289,6 +316,40 @@ func Load() (*Config, error) {
 	}
 	if c.AuthEnabled && c.RunnerSecret == "" {
 		return nil, fmt.Errorf("CONQUEST_AUTH_ENABLED needs CONQUEST_RUNNER_SECRET: without it, the runner callback API reaches every run unauthenticated")
+	}
+
+	c.ServiceInfo = ServiceInfo{
+		ID:               strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ID")),
+		Name:             strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_NAME")),
+		Description:      strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_DESCRIPTION")),
+		OrganizationName: strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ORGANIZATION_NAME")),
+		OrganizationURL:  strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ORGANIZATION_URL")),
+		ContactURL:       strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_CONTACT_URL")),
+		DocumentationURL: strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_DOCUMENTATION_URL")),
+		Environment:      strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ENVIRONMENT")),
+		Version:          strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_VERSION")),
+	}
+	origins, err := cors.ParseOrigins(os.Getenv("CONQUEST_CORS_ALLOWED_ORIGINS"))
+	if err != nil {
+		return nil, fmt.Errorf("CONQUEST_CORS_ALLOWED_ORIGINS: %w", err)
+	}
+	c.CORSAllowedOrigins = origins
+
+	if si := c.ServiceInfo; !si.IsZero() {
+		// GA4GH service-info requires these (the chart's deployment.yaml
+		// checks the same list).
+		required := []struct{ name, value string }{
+			{"CONQUEST_SERVICE_INFO_ID", si.ID},
+			{"CONQUEST_SERVICE_INFO_NAME", si.Name},
+			{"CONQUEST_SERVICE_INFO_ORGANIZATION_NAME", si.OrganizationName},
+			{"CONQUEST_SERVICE_INFO_ORGANIZATION_URL", si.OrganizationURL},
+			{"CONQUEST_SERVICE_INFO_VERSION", si.Version},
+		}
+		for _, f := range required {
+			if f.value == "" {
+				return nil, fmt.Errorf("%s is required when any CONQUEST_SERVICE_INFO_* is set", f.name)
+			}
+		}
 	}
 
 	// Pod security validation.

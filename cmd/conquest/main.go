@@ -30,6 +30,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/backend/routing"
 	"github.com/anuragxxd/conquest/internal/config"
 	"github.com/anuragxxd/conquest/internal/controller"
+	"github.com/anuragxxd/conquest/internal/cors"
 	"github.com/anuragxxd/conquest/internal/dispatcher"
 	"github.com/anuragxxd/conquest/internal/filer"
 	"github.com/anuragxxd/conquest/internal/isolation"
@@ -334,6 +335,16 @@ func run(log *slog.Logger) error {
 
 	// HTTP handlers.
 	wesHandler := wes.NewHandler(runCtrl)
+	wesHandler.SetServiceInfo(wes.ServiceInfoBase{
+		ID:               cfg.ServiceInfo.ID,
+		Name:             cfg.ServiceInfo.Name,
+		Description:      cfg.ServiceInfo.Description,
+		Organization:     &wes.Organization{Name: cfg.ServiceInfo.OrganizationName, URL: cfg.ServiceInfo.OrganizationURL},
+		ContactURL:       cfg.ServiceInfo.ContactURL,
+		DocumentationURL: cfg.ServiceInfo.DocumentationURL,
+		Environment:      cfg.ServiceInfo.Environment,
+		Version:          cfg.ServiceInfo.Version,
+	})
 	tesHandler := tes.NewHandler(runStore, taskStore, eventStore, tasks)
 	if runnerTokens != nil {
 		tesHandler.SetRunnerAuth(runnerTokens.Middleware(tes.RunLookup(runStore)))
@@ -367,7 +378,13 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	router := api.NewRouterWithAuth(wesHandler, tesHandler, authn, extraRoutes...)
+	// CORS wraps the router, so that preflight requests are answered before
+	// routing and authentication.
+	router := cors.Middleware(cfg.CORSAllowedOrigins, api.PublicPathPrefixes)(
+		api.NewRouterWithAuth(wesHandler, tesHandler, authn, extraRoutes...))
+	if len(cfg.CORSAllowedOrigins) > 0 {
+		log.Info("CORS enabled on the public WES and TES APIs", "origins", cfg.CORSAllowedOrigins)
+	}
 
 	// Start reconcilers if backends are available.
 	appCtx, appCancel := context.WithCancel(context.Background())

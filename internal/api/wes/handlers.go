@@ -22,6 +22,19 @@ import (
 // Handler holds the WES HTTP handlers.
 type Handler struct {
 	ctrl *controller.RunController
+	// base holds the GA4GH service-info base fields; zero: none.
+	base ServiceInfoBase
+}
+
+// SetServiceInfo makes service-info answer with the GA4GH base fields b,
+// with type org.ga4gh:wes:1.1.0; an empty b.ID leaves them out.
+func (h *Handler) SetServiceInfo(b ServiceInfoBase) {
+	if b.ID == "" {
+		h.base = ServiceInfoBase{}
+		return
+	}
+	b.Type = &ServiceType{Group: "org.ga4gh", Artifact: "wes", Version: "1.1.0"}
+	h.base = b
 }
 
 // NewHandler creates WES handlers.
@@ -72,14 +85,13 @@ func (h *Handler) GetServiceInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	info := ServiceInfo{
-		WorkflowTypeVersions:         workflowTypes,
-		SupportedWESVersions:         []string{"1.1.0"},
-		SupportedFilesystemProtocols: []string{"s3", "https"},
-		WorkflowEngineVersions:       engineVersions,
-		SystemStateCounts:            stateCounts,
-		Tags:                         tags,
-	}
+	info := ServiceInfo{ServiceInfoBase: h.base}
+	info.WorkflowTypeVersions = workflowTypes
+	info.SupportedWESVersions = []string{"1.1.0"}
+	info.SupportedFilesystemProtocols = []string{"s3", "https"}
+	info.WorkflowEngineVersions = engineVersions
+	info.SystemStateCounts = stateCounts
+	info.Tags = tags
 	writeJSON(w, http.StatusOK, info)
 }
 

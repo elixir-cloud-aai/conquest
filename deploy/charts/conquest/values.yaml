@@ -232,6 +232,29 @@ runner:
   # there every render generates a new secret.
   existingSecret: ""
 
+# CORS: exact origins of browser front ends (e.g. a portal) that may call
+# the public WES and TES APIs with a bearer token; preflight requests are
+# answered without a token. Never "*". Empty (default): no CORS headers.
+cors:
+  allowedOrigins: []
+  # - https://portal.example.org
+
+# GA4GH service-info base fields of WES service-info (registries list the
+# service by them). All empty (default): left out. If any is set, id, name,
+# organization.name, organization.url and version are required (rendering
+# fails otherwise).
+serviceInfo:
+  id: ""                # reverse domain name, e.g. org.example.conquest
+  name: ""              # e.g. Conquest (no host or environment in it)
+  description: ""
+  organization:         # the organization that hosts this instance
+    name: ""
+    url: ""
+  contactUrl: ""        # e.g. mailto:ops@example.org
+  documentationUrl: ""
+  environment: ""       # e.g. prod, test
+  version: ""           # version of this deployment
+
 # Token authentication on the public WES and TES APIs (README:
 # Authentication). Off by default: the APIs are open. When on, every request
 # needs an OAuth 2.0 access token of a configured issuer, callers see only

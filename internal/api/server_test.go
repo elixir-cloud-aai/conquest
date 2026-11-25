@@ -12,6 +12,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/api/tes"
 	"github.com/anuragxxd/conquest/internal/api/wes"
 	"github.com/anuragxxd/conquest/internal/controller"
+	"github.com/anuragxxd/conquest/internal/cors"
 	"github.com/anuragxxd/conquest/internal/storage"
 )
 
@@ -71,5 +72,33 @@ func TestNewRouter_WithoutAuth(t *testing.T) {
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ga4gh/tes/v1/service-info", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200", w.Code)
+	}
+}
+
+// Wrapped around the router as main does, CORS answers preflights before
+// chi (no OPTIONS routes: 405) and the token middleware (401) see them.
+func TestCORSPreflightBeforeRoutingAndAuth(t *testing.T) {
+	ctrl := controller.NewRunController(nil, nil, nil, storage.Layout{}, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	router := cors.Middleware([]string{"https://portal.example.org"}, PublicPathPrefixes)(
+		NewRouterWithAuth(wes.NewHandler(ctrl), tes.NewHandler(nil, nil, nil, nil), denyAll))
+
+	req := httptest.NewRequest(http.MethodOptions, "/ga4gh/wes/v1/runs", nil)
+	req.Header.Set("Origin", "https://portal.example.org")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "authorization")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent || w.Header().Get("Access-Control-Allow-Origin") != "https://portal.example.org" {
+		t.Fatalf("preflight: status %d, headers %v", w.Code, w.Header())
+	}
+
+	// the actual request still needs the token, and carries the CORS header
+	req = httptest.NewRequest(http.MethodGet, "/ga4gh/wes/v1/runs", nil)
+	req.Header.Set("Origin", "https://portal.example.org")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized || w.Header().Get("Access-Control-Allow-Origin") != "https://portal.example.org" {
+		t.Fatalf("request: status %d, headers %v", w.Code, w.Header())
 	}
 }

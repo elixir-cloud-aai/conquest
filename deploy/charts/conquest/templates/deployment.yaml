@@ -255,6 +255,36 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.runner.existingSecret | default (printf "%s-runner" (include "conquest.fullname" . | trunc 56 | trimSuffix "-")) }}
                   key: runner-secret
+            {{- with .Values.cors.allowedOrigins }}
+            - name: CONQUEST_CORS_ALLOWED_ORIGINS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- $si := .Values.serviceInfo | default dict }}
+            {{- $org := $si.organization | default dict }}
+            {{- /* values trimmed, as the server trims them */}}
+            {{- $t := dict
+                  "ID" ($si.id | default "" | toString | trim) "NAME" ($si.name | default "" | toString | trim)
+                  "DESCRIPTION" ($si.description | default "" | toString | trim)
+                  "ORGANIZATION_NAME" ($org.name | default "" | toString | trim) "ORGANIZATION_URL" ($org.url | default "" | toString | trim)
+                  "CONTACT_URL" ($si.contactUrl | default "" | toString | trim) "DOCUMENTATION_URL" ($si.documentationUrl | default "" | toString | trim)
+                  "ENVIRONMENT" ($si.environment | default "" | toString | trim) "VERSION" ($si.version | default "" | toString | trim) }}
+            {{- $siEnv := list
+                  (list "ID" $t.ID) (list "NAME" $t.NAME) (list "DESCRIPTION" $t.DESCRIPTION)
+                  (list "ORGANIZATION_NAME" $t.ORGANIZATION_NAME) (list "ORGANIZATION_URL" $t.ORGANIZATION_URL)
+                  (list "CONTACT_URL" $t.CONTACT_URL) (list "DOCUMENTATION_URL" $t.DOCUMENTATION_URL)
+                  (list "ENVIRONMENT" $t.ENVIRONMENT) (list "VERSION" $t.VERSION) }}
+            {{- $siSet := false }}
+            {{- range $siEnv }}{{ if index . 1 }}{{ $siSet = true }}{{ end }}{{ end }}
+            {{- /* same required fields as internal/config */}}
+            {{- if and $siSet (not (and $t.ID $t.NAME $t.ORGANIZATION_NAME $t.ORGANIZATION_URL $t.VERSION)) }}
+            {{- fail "serviceInfo: id, name, organization.name, organization.url and version are required when any serviceInfo value is set" }}
+            {{- end }}
+            {{- range $siEnv }}
+            {{- if index . 1 }}
+            - name: CONQUEST_SERVICE_INFO_{{ index . 0 }}
+              value: {{ index . 1 | quote }}
+            {{- end }}
+            {{- end }}
             {{- if or .Values.storageGateway.enabled .Values.storageIsolation.enabled }}
             - name: CONQUEST_STORAGE_GATEWAY_SECRET
               valueFrom:

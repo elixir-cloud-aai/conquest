@@ -12,8 +12,12 @@ import (
 // Service info
 // ---------------------------------------------------------------------------
 
-// ServiceInfo is the response for GET /service-info.
+// ServiceInfo is the response for GET /service-info: the GA4GH
+// service-info base fields (when configured, see SetServiceInfo) and the
+// WES fields.
 type ServiceInfo struct {
+	ServiceInfoBase
+
 	WorkflowTypeVersions         map[string]TypeVersions `json:"workflow_type_versions"`
 	SupportedWESVersions         []string                `json:"supported_wes_versions"`
 	SupportedFilesystemProtocols []string                `json:"supported_filesystem_protocols"`
@@ -21,6 +25,33 @@ type ServiceInfo struct {
 	SystemStateCounts            map[string]int          `json:"system_state_counts"`
 	AuthInstructionsURL          string                  `json:"auth_instructions_url"`
 	Tags                         map[string]string       `json:"tags,omitempty"`
+}
+
+// ServiceInfoBase holds the GA4GH service-info base fields; all empty:
+// none in the answer.
+type ServiceInfoBase struct {
+	ID               string        `json:"id,omitempty"`
+	Name             string        `json:"name,omitempty"`
+	Type             *ServiceType  `json:"type,omitempty"`
+	Description      string        `json:"description,omitempty"`
+	Organization     *Organization `json:"organization,omitempty"`
+	ContactURL       string        `json:"contactUrl,omitempty"`
+	DocumentationURL string        `json:"documentationUrl,omitempty"`
+	Environment      string        `json:"environment,omitempty"`
+	Version          string        `json:"version,omitempty"`
+}
+
+// ServiceType is the GA4GH service-info type.
+type ServiceType struct {
+	Group    string `json:"group"`
+	Artifact string `json:"artifact"`
+	Version  string `json:"version"`
+}
+
+// Organization is the GA4GH service-info organization.
+type Organization struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // TypeVersions holds the supported versions for a workflow type.
