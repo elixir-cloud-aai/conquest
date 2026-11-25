@@ -18,6 +18,12 @@
 //     remote servers upload wildcard renderings of FILE outputs).
 //
 // URLs work while the task is active and for a grace period after it ends.
+//
+// Two optional extensions serve Conquest's own task pods when they get no S3
+// credentials (internal/isolation): SetBound confines every task to a
+// prefix, such as its run's root, on top of its request; SetLister lets a
+// GET of a prefix URL (key ending in "/") below a DIRECTORY input list the
+// keys there. Without them, the gateway behaves as described above.
 package storagegw
 
 import (
@@ -53,6 +59,15 @@ type Presigner interface {
 	Presign(ctx context.Context, method, bucket, key string, expires time.Duration) (*url.URL, error)
 }
 
+// Lister lists the keys below a prefix; objstore.S3Client satisfies it.
+type Lister interface {
+	ListPrefix(ctx context.Context, bucket, prefix string) ([]string, error)
+}
+
+// Bound returns the "<bucket>/<key prefix>" that every object a task reaches
+// must lie under, whatever its request names; "" allows nothing.
+type Bound func(ctx context.Context, task *domain.Task) (string, error)
+
 // Config configures the gateway.
 type Config struct {
 	// PublicURL is the gateway's base URL as remote endpoints reach it,
@@ -74,6 +89,8 @@ type Gateway struct {
 	cfg     Config
 	tasks   TaskLookup
 	presign Presigner
+	lister  Lister
+	bound   Bound
 	log     *slog.Logger
 	now     func() time.Time
 }
@@ -103,6 +120,13 @@ func New(cfg Config, tasks TaskLookup, presign Presigner, log *slog.Logger) (*Ga
 	return &Gateway{cfg: cfg, tasks: tasks, presign: presign, log: log, now: time.Now}, nil
 }
 
+// SetBound confines every task to the prefix bound returns.
+func (g *Gateway) SetBound(bound Bound) { g.bound = bound }
+
+// SetLister enables listings: a GET of a prefix URL below one of the task's
+// DIRECTORY inputs answers {"keys": [...]} instead of a redirect.
+func (g *Gateway) SetLister(l Lister) { g.lister = l }
+
 // URL returns the capability URL through which a task reaches an object
 // or, with a key ending in "/", a prefix.
 func (g *Gateway) URL(taskID, bucket, key string) string {
@@ -110,8 +134,16 @@ func (g *Gateway) URL(taskID, bucket, key string) string {
 	for i, s := range segments {
 		segments[i] = url.PathEscape(s)
 	}
-	return fmt.Sprintf("%s%s/%s/%s/%s/%s", g.cfg.PublicURL, RoutePrefix,
-		url.PathEscape(taskID), g.sign(taskID), url.PathEscape(bucket), strings.Join(segments, "/"))
+	return fmt.Sprintf("%s/%s/%s", g.TaskRoot(g.cfg.PublicURL, taskID),
+		url.PathEscape(bucket), strings.Join(segments, "/"))
+}
+
+// TaskRoot returns the capability URL of a task without bucket and key, on
+// the given base URL (e.g. Conquest's in-cluster address); object URLs are
+// <root>/<bucket>/<key>.
+func (g *Gateway) TaskRoot(baseURL, taskID string) string {
+	return fmt.Sprintf("%s%s/%s/%s", strings.TrimRight(baseURL, "/"), RoutePrefix,
+		url.PathEscape(taskID), g.sign(taskID))
 }
 
 func (g *Gateway) sign(taskID string) string {
@@ -151,10 +183,19 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bucket not served", http.StatusForbidden)
 		return
 	}
+	if !g.withinBound(r.Context(), task, bucket, key) {
+		g.log.Warn("storage gateway: out of bound", "task_id", taskID, "method", r.Method, "bucket", bucket, "key", key)
+		http.Error(w, "object outside the task's bound", http.StatusForbidden)
+		return
+	}
 	scope, err := scopeOf(task)
 	if err != nil {
 		g.log.Error("storage gateway: unreadable task request", "task_id", taskID, "err", err)
 		http.Error(w, "task request unreadable", http.StatusInternalServerError)
+		return
+	}
+	if g.lister != nil && r.Method == http.MethodGet && strings.HasSuffix(key, "/") {
+		g.list(w, r, taskID, scope, bucket, key)
 		return
 	}
 	write := r.Method == http.MethodPut
@@ -174,6 +215,44 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", target.String())
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusTemporaryRedirect)
+}
+
+// withinBound reports whether bucket/key lies under the task's bound; with
+// no bound set, everything does.
+func (g *Gateway) withinBound(ctx context.Context, task *domain.Task, bucket, key string) bool {
+	if g.bound == nil {
+		return true
+	}
+	prefix, err := g.bound(ctx, task)
+	if err != nil {
+		g.log.Error("storage gateway: bound failed", "task_id", task.TaskID, "err", err)
+		return false
+	}
+	return prefix != "" && strings.HasPrefix(bucket+"/"+key, prefix)
+}
+
+// list answers the keys below prefix, which must lie below a DIRECTORY input.
+func (g *Gateway) list(w http.ResponseWriter, r *http.Request, taskID string, s *scope, bucket, prefix string) {
+	if !s.allowsList(bucket, prefix) {
+		g.log.Warn("storage gateway: listing out of scope", "task_id", taskID, "bucket", bucket, "prefix", prefix)
+		http.Error(w, "prefix not below the task's directory inputs", http.StatusForbidden)
+		return
+	}
+	keys, err := g.lister.ListPrefix(r.Context(), bucket, prefix)
+	if err != nil {
+		g.log.Error("storage gateway: listing failed", "task_id", taskID, "err", err)
+		http.Error(w, "listing failed", http.StatusBadGateway)
+		return
+	}
+	if keys == nil {
+		keys = []string{}
+	}
+	g.log.Info("storage gateway: list", "task_id", taskID, "bucket", bucket, "prefix", prefix, "keys", len(keys))
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(struct {
+		Keys []string `json:"keys"`
+	}{keys})
 }
 
 func (g *Gateway) active(task *domain.Task) bool {
@@ -278,6 +357,18 @@ func (s *scope) allows(bucket, key string, write bool) bool {
 		return true
 	}
 	for p := range prefixes {
+		if strings.HasPrefix(obj, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowsList reports whether a prefix (ending in "/") lies below one of the
+// task's DIRECTORY inputs.
+func (s *scope) allowsList(bucket, prefix string) bool {
+	obj := bucket + "/" + prefix
+	for p := range s.readPrefix {
 		if strings.HasPrefix(obj, p) {
 			return true
 		}
