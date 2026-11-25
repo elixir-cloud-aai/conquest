@@ -245,9 +245,9 @@ cors:
 # fails otherwise).
 serviceInfo:
   id: ""                # reverse domain name, e.g. org.example.conquest
-  name: ""
+  name: ""              # e.g. Conquest (no host or environment in it)
   description: ""
-  organization:
+  organization:         # the organization that hosts this instance
     name: ""
     url: ""
   contactUrl: ""        # e.g. mailto:ops@example.org

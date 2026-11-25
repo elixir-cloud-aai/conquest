@@ -40,7 +40,7 @@ func TestGetServiceInfo_BaseFields(t *testing.T) {
 	h := newServiceInfoHandler()
 	h.SetServiceInfo(ServiceInfoBase{
 		ID:               "org.example.conquest",
-		Name:             "Conquest (Example, XX)",
+		Name:             "Conquest",
 		Description:      "Workflows",
 		Organization:     &Organization{Name: "Example", URL: "https://example.org"},
 		ContactURL:       "mailto:ops@example.org",
@@ -50,7 +50,7 @@ func TestGetServiceInfo_BaseFields(t *testing.T) {
 	})
 	info := serviceInfo(t, h)
 	want := map[string]any{
-		"id": "org.example.conquest", "name": "Conquest (Example, XX)", "description": "Workflows",
+		"id": "org.example.conquest", "name": "Conquest", "description": "Workflows",
 		"contactUrl": "mailto:ops@example.org", "documentationUrl": "https://docs.example.org",
 		"environment": "prod", "version": "1.2.3",
 	}
