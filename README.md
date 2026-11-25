@@ -114,6 +114,18 @@ from input sizes, and a container can't start under a few MiB. See
 `CONQUEST_TASK_DEFAULT_*`, `CONQUEST_TASK_MIN_*`, and `CONQUEST_TASK_MAX_*`
 in [`internal/config/config.go`](internal/config/config.go).
 
+These resources apply to the executor container. The task pod's helper init
+containers (`copy-tools`, `stage-in`) get none by default, so a namespace
+LimitRange, if any, fills them in. Where a ResourceQuota requires requests or
+limits on every container and no LimitRange provides them, the API server
+refuses such pods (`must specify limits.cpu for: copy-tools,stage-in`): set
+`CONQUEST_TASK_HELPER_RESOURCES` to JSON in the shape of a container's
+`resources`, e.g.
+`{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"500m","memory":"256Mi"}}`
+(chart: `conquest.taskHelperResources`; the chart's `migrate` init container
+takes `conquest.migration.resources`). Conquest refuses to start if the value
+isn't valid.
+
 ## Workspace Modes
 
 Controls how the runner pod and task pods share (or don't share) a filesystem.
@@ -461,6 +473,7 @@ No config files.
 | `CONQUEST_POD_SECURITY`             | `restricted`         | `restricted` or `baseline`        |
 | `CONQUEST_POD_RUN_AS_USER`          | `1000`               | UID for runner/task containers    |
 | `CONQUEST_POD_RUN_AS_GROUP`         | `1000`               | GID and fsGroup for those pods    |
+| `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Resources of task init containers (JSON) |
 | `CONQUEST_RECONCILER_INTERVAL`      | `5s`                 | How often reconcilers poll K8s    |
 | `CONQUEST_ASYNC_DISPATCH`           | `true`               | Submit TES tasks in the background |
 | `CONQUEST_DISPATCH_WORKERS`         | `8`                  | Task submissions in parallel      |
