@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -348,17 +349,20 @@ func inflateWorkspaceBinding(kind, claimName, accessMode, pvName *string) *domai
 	return w
 }
 
-func parseCursor(token string) (unixNano int64, runID string, err error) {
+// parseCursor returns the creation time and ID that a page token names. The
+// time is a time.Time, as the created_at columns it is compared with are
+// timestamptz (pgx can't encode an integer as one).
+func parseCursor(token string) (createdAt time.Time, runID string, err error) {
 	// Token format: "unixNano:runID"
 	for i := 0; i < len(token); i++ {
 		if token[i] == ':' {
-			unixNano, err = strconv.ParseInt(token[:i], 10, 64)
+			unixNano, err := strconv.ParseInt(token[:i], 10, 64)
 			if err != nil {
-				return 0, "", err
+				return time.Time{}, "", err
 			}
 			runID = token[i+1:]
-			return unixNano, runID, nil
+			return time.Unix(0, unixNano).UTC(), runID, nil
 		}
 	}
-	return 0, "", fmt.Errorf("malformed cursor %q", token)
+	return time.Time{}, "", fmt.Errorf("malformed cursor %q", token)
 }
