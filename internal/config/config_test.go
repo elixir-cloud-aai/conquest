@@ -224,3 +224,45 @@ func TestLoad_ReadsTaskHelperResources(t *testing.T) {
 		t.Fatalf("task helper resources = %q, want %q", cfg.TaskHelperResources, raw)
 	}
 }
+
+func TestLoad_AuthDefaults(t *testing.T) {
+	t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
+	t.Setenv("CONQUEST_S3_BUCKET", "conquest")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AuthEnabled || !cfg.AuthServiceInfoPublic || cfg.AuthConfigFile != "/etc/conquest/auth/config.yaml" {
+		t.Fatalf("auth = %v, service-info public %v, file %q", cfg.AuthEnabled, cfg.AuthServiceInfoPublic, cfg.AuthConfigFile)
+	}
+}
+
+func TestLoad_AuthSettings(t *testing.T) {
+	t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
+	t.Setenv("CONQUEST_S3_BUCKET", "conquest")
+	t.Setenv("CONQUEST_AUTH_ENABLED", "true")
+	t.Setenv("CONQUEST_AUTH_SERVICE_INFO_PUBLIC", "false")
+	t.Setenv("CONQUEST_AUTH_CONFIG", "/config/auth.yaml")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.AuthEnabled || cfg.AuthServiceInfoPublic || cfg.AuthConfigFile != "/config/auth.yaml" {
+		t.Fatalf("auth = %v, service-info public %v, file %q", cfg.AuthEnabled, cfg.AuthServiceInfoPublic, cfg.AuthConfigFile)
+	}
+}
+
+func TestLoad_RejectsInvalidAuthSwitch(t *testing.T) {
+	for _, key := range []string{"CONQUEST_AUTH_ENABLED", "CONQUEST_AUTH_SERVICE_INFO_PUBLIC"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
+			t.Setenv("CONQUEST_S3_BUCKET", "conquest")
+			t.Setenv(key, "ture")
+			if _, err := Load(); err == nil {
+				t.Fatal("expected error for invalid boolean")
+			}
+		})
+	}
+}

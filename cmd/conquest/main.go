@@ -321,7 +321,13 @@ func run(log *slog.Logger) error {
 	if gateway != nil {
 		extraRoutes = append(extraRoutes, gateway.Routes)
 	}
-	router := api.NewRouter(wesHandler, tesHandler, extraRoutes...)
+	authCtx, authCancel := context.WithCancel(context.Background())
+	defer authCancel()
+	authn, err := newAuthMiddleware(authCtx, cfg, log)
+	if err != nil {
+		return err
+	}
+	router := api.NewRouterWithAuth(wesHandler, tesHandler, authn, extraRoutes...)
 
 	// Start reconcilers if backends are available.
 	appCtx, appCancel := context.WithCancel(context.Background())

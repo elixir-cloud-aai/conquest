@@ -92,6 +92,16 @@ type Config struct {
 	// on the local Kubernetes backend.
 	FederationConfigFile string
 
+	// AuthEnabled requires bearer access tokens on the public WES and TES
+	// APIs (see internal/auth); false (default): the APIs are open.
+	AuthEnabled bool
+	// AuthServiceInfoPublic keeps the service-info endpoints open when
+	// AuthEnabled (default true).
+	AuthServiceInfoPublic bool
+	// AuthConfigFile is the YAML file of trusted issuers, audiences and
+	// service clients, read when AuthEnabled.
+	AuthConfigFile string
+
 	// StorageGatewayURL is the storage gateway's public base URL, as remote
 	// TES endpoints reach this server. Empty: the gateway is off.
 	StorageGatewayURL string
@@ -144,6 +154,9 @@ func Load() (*Config, error) {
 		S3Endpoint:                    envOr("CONQUEST_S3_ENDPOINT", ""),
 		S3Region:                      envOr("CONQUEST_S3_REGION", "us-east-1"),
 		FederationConfigFile:          strings.TrimSpace(os.Getenv("CONQUEST_FEDERATION_CONFIG")),
+		AuthEnabled:                   envBoolOr("CONQUEST_AUTH_ENABLED", false),
+		AuthServiceInfoPublic:         envBoolOr("CONQUEST_AUTH_SERVICE_INFO_PUBLIC", true),
+		AuthConfigFile:                envOr("CONQUEST_AUTH_CONFIG", "/etc/conquest/auth/config.yaml"),
 		StorageGatewayURL:             strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_GATEWAY_URL")),
 		StorageGatewaySecret:          os.Getenv("CONQUEST_STORAGE_GATEWAY_SECRET"),
 		S3PublicEndpoint:              strings.TrimSpace(os.Getenv("CONQUEST_S3_PUBLIC_ENDPOINT")),
@@ -202,6 +215,15 @@ func Load() (*Config, error) {
 	// Default CSI secret namespace to the K8s namespace if not explicitly set.
 	if c.ObjectFSCSISecretNamespace == "" {
 		c.ObjectFSCSISecretNamespace = c.K8sNamespace
+	}
+
+	// A mistyped auth switch must not silently leave the APIs open.
+	for _, key := range []string{"CONQUEST_AUTH_ENABLED", "CONQUEST_AUTH_SERVICE_INFO_PUBLIC"} {
+		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+			if _, err := strconv.ParseBool(v); err != nil {
+				return nil, fmt.Errorf("%s must be true or false, got %q", key, v)
+			}
+		}
 	}
 
 	if c.PostgresDSN == "" {
