@@ -334,13 +334,91 @@ Every run can record the caller that created it (`runs.owner`, migration
 an owner, new runs are stamped with that owner, and the repository returns
 only that owner's runs and their tasks: another owner's run or task, or one
 created without an owner, reads as not found. A context without an owner is
-unscoped and sees every run, as before; no code path sets an owner yet, so
-existing deployments see no change. Only reads are scoped: writes address a
+unscoped and sees every run, as before. With authentication on (below), each
+API request is scoped to its caller; with it off, nothing sets an owner and
+Conquest behaves as before. Only reads are scoped: writes address a
 run or task that a scoped read has returned, and aggregates (the state
 counts in `service-info`) and internal callers (reconcilers, the dispatcher,
 the runner callback API) stay unscoped. A public TES task that names a run
 in the tag `conquest_run_id` is refused with 404 unless the caller can read
 that run.
+
+### Authentication
+
+Off by default: the APIs are open, as before, and the server logs a warning
+at startup. With `CONQUEST_AUTH_ENABLED=true`, every request to the public
+WES and TES routes needs an OAuth 2.0 access token in an
+`Authorization: Bearer` header (package `internal/auth`). Probes, the runner
+callback API (`/internal/runs/...`) and the storage gateway are not
+affected. `service-info` stays open unless
+`CONQUEST_AUTH_SERVICE_INFO_PUBLIC=false`; a token sent there is ignored.
+
+A token is accepted when:
+
+- it is a JWT signed with an allowed asymmetric algorithm (default RS256,
+  ES256; never `none` or HMAC) by a key of the issuer it names; `iss` must
+  equal a configured issuer exactly, and keys come only from that issuer's
+  key set (`jwks_uri`, or discovered from
+  `<issuer>/.well-known/openid-configuration`);
+- its `typ` header is `at+jwt` or `application/at+jwt` (RFC 9068, any
+  case), which refuses ID tokens;
+- `exp` is present and not past, `nbf` and `iat` are not in the future
+  (with `clock_skew_seconds` leeway), and `sub` is set;
+- its audience fits the caller: a **service client** (its `client_id` is
+  listed under the issuer's `service_clients` and `sub == client_id`) must
+  present `aud` equal to its own client ID only; any other token is a user
+  token, and its `aud` must contain one of the issuer's `audiences` (the
+  client IDs of the front ends whose tokens Conquest accepts). A token whose
+  `sub` is a listed client ID without being that client's own token is
+  refused.
+
+The caller owns the runs it creates, as `<iss>|<sub>` (see Run owners), and
+sees only those. Failures answer 401 with `WWW-Authenticate: Bearer` (no
+token) or `Bearer error="invalid_token"`; the cause is logged, never the
+token. Tokens must name their key (`kid`); keys marked for encryption
+(`use: enc`) are not used. If an issuer's discovery document or key set
+can't be fetched, requests answer 503 (also while the first fetch is in
+progress) and the fetch is retried 10 seconds after the failed attempt.
+An unknown key ID refetches the key set at most once a minute; within that
+minute, further unknown key IDs are refused at once (401), so a burst of
+tokens with made-up key IDs can delay the pickup of a rotated key by up to a
+minute.
+
+The issuers live in a YAML file (`CONQUEST_AUTH_CONFIG`, default
+`/etc/conquest/auth/config.yaml`); unknown keys are refused, and the server
+does not start with an invalid file:
+
+```yaml
+issuers:
+  - url: https://login.aai.lifescience-ri.eu/oidc/  # exactly as in iss
+    # jwks_uri: https://...                        # default: discovery
+    audiences: [<front-end client ID>]             # required
+    service_clients:                               # optional
+      - client_id: <client ID>
+algorithms: [RS256, ES256]  # default
+clock_skew_seconds: 60      # default
+timeout_seconds: 10         # default and maximum; discovery and key set requests
+```
+
+Issuer and key set URLs must use https (plain http only to a loopback
+host), also after redirects, and issuer URLs must not contain `|` (it
+separates issuer and subject in run owners). Tokens must carry `exp`,
+`iat` and `sub`. So far Conquest only authenticates callers; who may create runs (an
+entitlement check at submit) is not enforced yet, so any accepted caller can
+submit. The Helm chart can't switch authentication on yet (the environment
+variables and the config file mount come in a follow-up).
+
+The runner callback API (`/internal/runs/...`) has no authentication yet
+and reaches every task. Keep it off any public route: expose only
+`/ga4gh/wes/` (and `/ga4gh/tes/` if needed) through the ingress or
+gateway, and restrict in-cluster access to the server's port with a
+NetworkPolicy where you can. Authenticating the runners is a follow-up.
+
+Upgrading: runs created before authentication have no owner and are no
+longer visible through the API (operators can still inspect and delete them
+in PostgreSQL). Workflow runners call the unauthenticated runner callback
+API, so runs keep working; drain active runs before switching
+authentication on all the same, so that no run straddles the change.
 
 ## Federation: Remote TES Endpoints
 
@@ -558,6 +636,9 @@ No config files.
 | `CONQUEST_S3_BUCKET`                | `conquest-workflows` | Object storage bucket             |
 | `CONQUEST_S3_ENDPOINT`              | —                    | S3 / MinIO endpoint               |
 | `CONQUEST_K8S_NAMESPACE`            | `conquest`           | Kubernetes namespace for Jobs     |
+| `CONQUEST_AUTH_ENABLED`             | `false`              | Require bearer tokens             |
+| `CONQUEST_AUTH_SERVICE_INFO_PUBLIC` | `true`               | Open `service-info` with auth on  |
+| `CONQUEST_AUTH_CONFIG`              | see Authentication   | Issuers and audiences (YAML)      |
 | `CONQUEST_WORKSPACE_MODE`           | `emptydir`           | `emptydir`, `pvc`, or `objectfs`  |
 | `CONQUEST_WORKSPACE_ACCESS_MODE`    | `RWX`                | `RWX` or `RWO` (when mode=pvc)     |
 | `CONQUEST_WORKSPACE_SIZE`           | `10Gi`               | PVC / objectfs volume size        |

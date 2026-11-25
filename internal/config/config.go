@@ -92,6 +92,16 @@ type Config struct {
 	// on the local Kubernetes backend.
 	FederationConfigFile string
 
+	// AuthEnabled requires bearer access tokens on the public WES and TES
+	// APIs (see internal/auth); false (default): the APIs are open.
+	AuthEnabled bool
+	// AuthServiceInfoPublic keeps the service-info endpoints open when
+	// AuthEnabled (default true).
+	AuthServiceInfoPublic bool
+	// AuthConfigFile is the YAML file of trusted issuers, audiences and
+	// service clients, read when AuthEnabled.
+	AuthConfigFile string
+
 	// StorageGatewayURL is the storage gateway's public base URL, as remote
 	// TES endpoints reach this server. Empty: the gateway is off.
 	StorageGatewayURL string
@@ -115,6 +125,17 @@ type Config struct {
 const defaultTaskMinRAMGb = 0.125
 
 func Load() (*Config, error) {
+	// A mistyped auth switch must not silently leave the APIs open, so
+	// these two fail on values that aren't booleans (unlike envBoolOr).
+	authEnabled, err := envBoolStrict("CONQUEST_AUTH_ENABLED", false)
+	if err != nil {
+		return nil, err
+	}
+	authServiceInfoPublic, err := envBoolStrict("CONQUEST_AUTH_SERVICE_INFO_PUBLIC", true)
+	if err != nil {
+		return nil, err
+	}
+
 	nextflowRunnerImages := map[string]string{}
 	if raw := strings.TrimSpace(os.Getenv("CONQUEST_NEXTFLOW_RUNNER_IMAGES")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &nextflowRunnerImages); err != nil {
@@ -149,6 +170,9 @@ func Load() (*Config, error) {
 		S3Endpoint:                    envOr("CONQUEST_S3_ENDPOINT", ""),
 		S3Region:                      envOr("CONQUEST_S3_REGION", "us-east-1"),
 		FederationConfigFile:          strings.TrimSpace(os.Getenv("CONQUEST_FEDERATION_CONFIG")),
+		AuthEnabled:                   authEnabled,
+		AuthServiceInfoPublic:         authServiceInfoPublic,
+		AuthConfigFile:                envOr("CONQUEST_AUTH_CONFIG", "/etc/conquest/auth/config.yaml"),
 		StorageGatewayURL:             strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_GATEWAY_URL")),
 		StorageGatewaySecret:          os.Getenv("CONQUEST_STORAGE_GATEWAY_SECRET"),
 		S3PublicEndpoint:              strings.TrimSpace(os.Getenv("CONQUEST_S3_PUBLIC_ENDPOINT")),
@@ -370,4 +394,18 @@ func envBoolOr(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+// envBoolStrict is envBoolOr for settings where a typo must not fall back
+// to the default: a value that isn't a boolean is an error.
+func envBoolStrict(key string, fallback bool) (bool, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false, got %q", key, v)
+	}
+	return b, nil
 }

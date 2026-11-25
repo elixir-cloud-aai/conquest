@@ -16,6 +16,13 @@ import (
 // plus health, readiness, and startup probes matching the platform convention.
 // extra mounts further routes (e.g. the storage gateway).
 func NewRouter(wesHandler *wes.Handler, tesHandler *tes.Handler, extra ...func(chi.Router)) http.Handler {
+	return NewRouterWithAuth(wesHandler, tesHandler, nil, extra...)
+}
+
+// NewRouterWithAuth is NewRouter with authn (e.g. auth.Authenticator's
+// Middleware) in front of the public WES and TES routes; nil mounts none.
+// Probes, the internal runner routes and extra routes are not affected.
+func NewRouterWithAuth(wesHandler *wes.Handler, tesHandler *tes.Handler, authn func(http.Handler) http.Handler, extra ...func(chi.Router)) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware.
@@ -37,11 +44,17 @@ func NewRouter(wesHandler *wes.Handler, tesHandler *tes.Handler, extra ...func(c
 	r.Get("/readyz", okResponse)
 	r.Get("/startupz", okResponse)
 
-	// WES routes.
-	wesHandler.Routes(r)
+	r.Group(func(r chi.Router) {
+		if authn != nil {
+			r.Use(authn)
+		}
 
-	// TES routes (public).
-	tesHandler.Routes(r)
+		// WES routes.
+		wesHandler.Routes(r)
+
+		// TES routes (public).
+		tesHandler.Routes(r)
+	})
 
 	// TES routes (internal, run-scoped — used by Nextflow runner).
 	tesHandler.InternalRoutes(r)
