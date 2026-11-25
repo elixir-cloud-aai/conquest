@@ -59,6 +59,9 @@ type Presigner interface {
 	Presign(ctx context.Context, method, bucket, key string, expires time.Duration) (*url.URL, error)
 }
 
+// MaxListKeys bounds a listing's answer; longer listings get 413.
+const MaxListKeys = 100000
+
 // Lister lists the keys below a prefix; objstore.S3Client satisfies it.
 type Lister interface {
 	ListPrefix(ctx context.Context, bucket, prefix string) ([]string, error)
@@ -242,6 +245,11 @@ func (g *Gateway) list(w http.ResponseWriter, r *http.Request, taskID string, s 
 	if err != nil {
 		g.log.Error("storage gateway: listing failed", "task_id", taskID, "err", err)
 		http.Error(w, "listing failed", http.StatusBadGateway)
+		return
+	}
+	if len(keys) > MaxListKeys {
+		g.log.Warn("storage gateway: listing too long", "task_id", taskID, "bucket", bucket, "prefix", prefix, "keys", len(keys))
+		http.Error(w, fmt.Sprintf("more than %d keys", MaxListKeys), http.StatusRequestEntityTooLarge)
 		return
 	}
 	if keys == nil {

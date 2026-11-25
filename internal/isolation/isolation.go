@@ -19,6 +19,10 @@
 // endpoints that use the gateway as well. URLs stop working shortly after the
 // task ends.
 //
+// The bound trusts the task's run ID, which the runner callback API and the
+// public TES API's conquest_run_id tag take from the caller; isolation is only
+// as strong as the authentication of those APIs.
+//
 // The runner pods of the workflow engines are not covered: they still get
 // the S3 credentials, because the engines read and write the run's work
 // directory with their own S3 clients.

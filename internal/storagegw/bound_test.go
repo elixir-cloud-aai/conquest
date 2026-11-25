@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -169,5 +170,18 @@ func TestEncodedTraversal(t *testing.T) {
 	}
 	if len(p.calls) != 0 {
 		t.Errorf("presigned = %v", p.calls)
+	}
+}
+
+func TestListTooLong(t *testing.T) {
+	gw, _, h := newGateway(t, activeTask())
+	l := &lister{}
+	for i := 0; i <= MaxListKeys; i++ {
+		l.keys = append(l.keys, fmt.Sprintf("run/bundle/%d", i))
+	}
+	gw.SetLister(l)
+
+	if rec := do(t, h, http.MethodGet, gw.URL("t1", "conquest", "run/bundle/")); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
 	}
 }

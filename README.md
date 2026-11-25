@@ -277,7 +277,16 @@ after the task ends.
   else `CONQUEST_S3_ENDPOINT`.
 - `s3://` inputs and outputs must lie below the run's root. Inputs elsewhere
   in the bucket (e.g. shared reference data) are refused; standalone TES
-  tasks (no WES run) reach only their own stub run's prefix.
+  tasks without a `conquest_run_id` tag reach only their own stub run's
+  prefix. Listings answer at most 100000 keys (`413` beyond).
+- The bound is only as strong as the task's run ID, which comes from the
+  caller: the runner callback API (`/internal/runs/<run ID>/...`) and the
+  `conquest_run_id` tag on the public TES API attach a task to any run,
+  unauthenticated, so isolation holds only where callers that can reach
+  those APIs are trusted, until they are authenticated and checked for the
+  run's owner.
+- The bound uses the current `CONQUEST_LAYOUT_VERSION`: drain runs before
+  changing it.
 - Uploads are single presigned `PUT`s, so S3's limit for one `PUT` applies to
   each output file (5 GiB on AWS and Ceph RGW by default).
 - Not covered: runner pods. The engines read and write the run's work
