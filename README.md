@@ -760,6 +760,16 @@ that others can reach.
   without `create.entitlements` or at least one service client.
 - **Storage isolation** (see Storage Isolation): `storageIsolation.enabled:
   true` keeps S3 credentials out of task pods.
+  Runner pods still get the bucket-wide S3 credentials (see Storage
+  Isolation, "Not covered"): workflow code in a runner can read and write
+  every run's objects in the bucket. Until that is fixed, let only trusted
+  callers create runs (`create.entitlements`), process only data that
+  isn't sensitive, and tell users about this limit.
+- **Routes**: the chart creates no Ingress or HTTPRoute. Route publicly
+  only what callers outside the cluster need: `/ga4gh/wes/v1/` for
+  workflow submitters and, with remote TES endpoints
+  (`storageGateway.enabled`), the storage gateway's `/storage/v1/t/`.
+  Keep `/ga4gh/tes/`, `/internal/` and the probes off public routes.
 
 ```yaml
 auth:
