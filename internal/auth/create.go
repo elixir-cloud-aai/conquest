@@ -110,8 +110,12 @@ func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.Ra
 		return nil, fmt.Errorf("%w: userinfo: %s", errUnavailable, resp.Status)
 	}
 	var info map[string]json.RawMessage
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&info); err != nil || info == nil {
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
+	if err := dec.Decode(&info); err != nil || info == nil {
 		return nil, fmt.Errorf("%w: userinfo: not a JSON object", errUnavailable)
+	}
+	if _, err := dec.Token(); err != io.EOF { // nothing may follow the object
+		return nil, fmt.Errorf("%w: userinfo: data after the JSON object", errUnavailable)
 	}
 	return info, nil
 }

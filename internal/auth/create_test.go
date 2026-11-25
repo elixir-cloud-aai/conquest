@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -148,6 +149,10 @@ func TestMiddleware_Create(t *testing.T) {
 			http.StatusBadGateway, "", nil, http.StatusServiceUnavailable, 1},
 		{"userinfo not JSON", http.MethodPost, user("alice"),
 			0, "<html>", nil, http.StatusServiceUnavailable, 1},
+		{"userinfo object followed by more data", http.MethodPost, user("alice"),
+			0, `{"sub":"alice","eduperson_entitlement":["` + entitled + `"]} {}`, nil, http.StatusServiceUnavailable, 1},
+		{"userinfo object followed by whitespace", http.MethodPost, user("alice"),
+			0, `{"sub":"alice","eduperson_entitlement":["` + entitled + `"]}` + "\n ", nil, http.StatusTeapot, 1},
 		{"userinfo JSON but not an object", http.MethodPost, user("alice"),
 			0, `["sub"]`, nil, http.StatusServiceUnavailable, 1},
 		{"userinfo redirect", http.MethodPost, user("alice"),
@@ -332,7 +337,7 @@ func TestEntitlements(t *testing.T) {
 		{``, nil},
 	} {
 		got := entitlements(map[string]json.RawMessage{"e": json.RawMessage(tt.raw)}, "e")
-		if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+		if !slices.Equal(got, tt.want) {
 			t.Errorf("%s: got %v, want %v", tt.raw, got, tt.want)
 		}
 	}
