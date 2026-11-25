@@ -21,8 +21,12 @@ import (
 // where a ResourceQuota requires requests or limits on every container.
 func ParseHelperResources(raw string) (corev1.ResourceRequirements, error) {
 	var res corev1.ResourceRequirements
-	if strings.TrimSpace(raw) == "" {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return res, nil
+	}
+	if !strings.HasPrefix(trimmed, "{") {
+		return corev1.ResourceRequirements{}, fmt.Errorf("parse helper container resources: want a JSON object, got %.20q", trimmed)
 	}
 
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -47,6 +51,10 @@ func ParseHelperResources(raw string) (corev1.ResourceRequirements, error) {
 			}
 			if q.Sign() < 0 {
 				return corev1.ResourceRequirements{}, fmt.Errorf("helper container resources: %s must not be negative, got %s", name, q.String())
+			}
+			// Kubernetes accounts CPU in millicores; finer values make no sense.
+			if name == corev1.ResourceCPU && q.Sign() > 0 && q.MilliValue()*1000000 != q.ScaledValue(-9) {
+				return corev1.ResourceRequirements{}, fmt.Errorf("helper container resources: cpu must be 0 or at least 1m, in whole millicores, got %s", q.String())
 			}
 		}
 	}

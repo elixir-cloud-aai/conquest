@@ -149,6 +149,9 @@ func TestParseHelperResources(t *testing.T) {
 		{name: "misspelled resource", raw: `{"limits": {"cpus": "1"}}`, wantErr: `unsupported resource "cpus"`},
 		{name: "other resource", raw: `{"requests": {"hugepages-2Mi": "1Gi"}}`, wantErr: "unsupported resource"},
 		{name: "claims", raw: `{"claims": [{"name": "gpu"}]}`, wantErr: "claims"},
+		{name: "null", raw: "null", wantErr: "JSON object"},
+		{name: "sub-millicore cpu", raw: `{"requests": {"cpu": "0.0001"}}`, wantErr: "cpu must be 0 or at least 1m"},
+		{name: "zero cpu", raw: `{"requests": {"cpu": "0"}}`, want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
