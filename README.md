@@ -522,9 +522,11 @@ Runner images must come from a build that sends the token (this version
 or later), including every per-version override
 (`CONQUEST_NEXTFLOW_RUNNER_IMAGES` and the like, chart `*RunnerImages`):
 older runners get `401` on their first callback.
-Drain active runs before setting or rotating the secret; with more than one
-replica, roll out with the Deployment strategy `Recreate`, since all
-replicas must use the same secret.
+Drain active runs before setting or rotating the secret, and roll out with
+the Deployment strategy `Recreate` (any replica count: during a rolling
+update, old and new pods would sign with different secrets). Changing the
+Secret's data doesn't restart the pods: restart the Deployment after a
+rotation (`kubectl rollout restart deployment/<name>`).
 
 ## Federation: Remote TES Endpoints
 
