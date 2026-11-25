@@ -24,6 +24,9 @@ type CreateConfig struct {
 
 const defaultEntitlementClaim = "eduperson_entitlement"
 
+// maxUserinfoBytes bounds the userinfo body Conquest reads.
+const maxUserinfoBytes = 1 << 20
+
 // errForbidden marks an authenticated caller who may not create (403).
 var errForbidden = errors.New("caller may not create")
 
@@ -109,13 +112,18 @@ func (i *issuer) userinfo(ctx context.Context, token string) (map[string]json.Ra
 	default:
 		return nil, fmt.Errorf("%w: userinfo: %s", errUnavailable, resp.Status)
 	}
-	var info map[string]json.RawMessage
-	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
-	if err := dec.Decode(&info); err != nil || info == nil {
-		return nil, fmt.Errorf("%w: userinfo: not a JSON object", errUnavailable)
+	// One byte over the limit tells a body that is too large from one
+	// that just fits; Unmarshal refuses data after the object.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxUserinfoBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: userinfo: %v", errUnavailable, err)
 	}
-	if _, err := dec.Token(); err != io.EOF { // nothing may follow the object
-		return nil, fmt.Errorf("%w: userinfo: data after the JSON object", errUnavailable)
+	if len(body) > maxUserinfoBytes {
+		return nil, fmt.Errorf("%w: userinfo: body larger than %d bytes", errUnavailable, maxUserinfoBytes)
+	}
+	var info map[string]json.RawMessage
+	if err := json.Unmarshal(body, &info); err != nil || info == nil {
+		return nil, fmt.Errorf("%w: userinfo: not a single JSON object", errUnavailable)
 	}
 	return info, nil
 }
