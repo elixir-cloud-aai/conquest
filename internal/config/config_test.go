@@ -232,7 +232,7 @@ func TestLoad_ReadsTaskHelperResources(t *testing.T) {
 // in the environment don't leak in.
 func clearAuthEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"CONQUEST_AUTH_ENABLED", "CONQUEST_AUTH_SERVICE_INFO_PUBLIC", "CONQUEST_AUTH_CONFIG"} {
+	for _, key := range []string{"CONQUEST_AUTH_ENABLED", "CONQUEST_AUTH_SERVICE_INFO_PUBLIC", "CONQUEST_AUTH_CONFIG", "CONQUEST_RUNNER_SECRET"} {
 		t.Setenv(key, "")
 	}
 }
@@ -258,6 +258,7 @@ func TestLoad_AuthSettings(t *testing.T) {
 	t.Setenv("CONQUEST_AUTH_ENABLED", "true")
 	t.Setenv("CONQUEST_AUTH_SERVICE_INFO_PUBLIC", "false")
 	t.Setenv("CONQUEST_AUTH_CONFIG", "/config/auth.yaml")
+	t.Setenv("CONQUEST_RUNNER_SECRET", strings.Repeat("r", 32))
 
 	cfg, err := Load()
 	if err != nil {
@@ -277,6 +278,40 @@ func TestLoad_RejectsInvalidAuthSwitch(t *testing.T) {
 			t.Setenv(key, "ture")
 			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {
 				t.Fatalf("err = %v, want an error naming %s", err, key)
+			}
+		})
+	}
+}
+
+func TestLoad_RunnerSecret(t *testing.T) {
+	cases := []struct {
+		name, auth, secret, wantErr string
+	}{
+		{"unset, auth off: open callbacks", "", "", ""},
+		{"set, auth off", "", strings.Repeat("r", 32), ""},
+		{"set, auth on", "true", strings.Repeat("r", 32), ""},
+		{"too short", "", strings.Repeat("r", 31), "at least 32 bytes"},
+		{"unset, auth on", "true", "", "needs CONQUEST_RUNNER_SECRET"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearAuthEnv(t)
+			t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
+			t.Setenv("CONQUEST_S3_BUCKET", "conquest")
+			t.Setenv("CONQUEST_AUTH_ENABLED", c.auth)
+			t.Setenv("CONQUEST_RUNNER_SECRET", c.secret)
+			cfg, err := Load()
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Fatalf("err = %v, want %q", err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.RunnerSecret != c.secret {
+				t.Fatalf("RunnerSecret = %q", cfg.RunnerSecret)
 			}
 		})
 	}

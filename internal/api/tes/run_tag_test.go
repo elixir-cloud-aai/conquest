@@ -33,6 +33,14 @@ func (m *memRuns) Get(_ context.Context, id string) (*domain.Run, error) {
 	return nil, pg.ErrNotFound
 }
 
+func (m *memRuns) GetStatus(ctx context.Context, id string) (domain.State, error) {
+	r, err := m.Get(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return r.State, nil
+}
+
 func TestCreateTaskWithRunTag(t *testing.T) {
 	own := &domain.Run{RunID: "run-own", State: domain.StateRunning}
 	body := `{"executors":[{"image":"ubuntu:24.04","command":["true"]}],"tags":{"conquest_run_id":"%s"}}`

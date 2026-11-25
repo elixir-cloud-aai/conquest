@@ -5,6 +5,7 @@
 package adapter
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,14 +31,27 @@ type NextflowRunConfig struct {
 	S3Endpoint      string   // MinIO endpoint
 	S3Region        string
 	WorkflowParams  json.RawMessage // raw params JSON from WES request
+	// RunnerToken authenticates nf-ga4gh's calls to InternalTESBase
+	// (tes.oauthToken: "Authorization: Bearer" on every call); hex digits
+	// only. It goes into AuthConfigContent, never into the workspace.
+	// Empty: no token.
+	RunnerToken string
 }
+
+// RunnerAuthConfigPath is where the runner writes AuthConfigContent: in
+// the runner pod's own /tmp (an emptyDir), not in the workspace, which
+// other pods (task pods, S3 in objectfs mode) can read.
+const RunnerAuthConfigPath = "/tmp/conquest/runner-auth.config"
 
 // GeneratedConfig is the output of the adapter: files to write and
 // command-line args for the `nextflow run` invocation.
 type GeneratedConfig struct {
-	ConfigContent string   // nextflow.config file content
-	ParamsContent string   // params.json file content (empty if no params)
-	CLIArgs       []string // full `nextflow run ...` args
+	ConfigContent string // nextflow.config file content
+	// AuthConfigContent is the config with the runner token (empty
+	// without one), for RunnerAuthConfigPath; CLIArgs load it.
+	AuthConfigContent string
+	ParamsContent     string   // params.json file content (empty if no params)
+	CLIArgs           []string // full `nextflow run ...` args
 }
 
 // GenerateNextflowConfig produces the Nextflow configuration and CLI args
@@ -80,6 +94,13 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 	config.WriteString("  }\n")
 	config.WriteString("}\n")
 	config.WriteString(fmt.Sprintf("tes.endpoint = '%s'\n\n", tesEndpoint))
+	authConfig := ""
+	if cfg.RunnerToken != "" {
+		if _, err := hex.DecodeString(cfg.RunnerToken); err != nil {
+			return nil, fmt.Errorf("runner token must be hex digits")
+		}
+		authConfig = fmt.Sprintf("tes.oauthToken = '%s'\n", cfg.RunnerToken)
+	}
 
 	// Work directory.
 	config.WriteString(fmt.Sprintf("workDir = '%s'\n\n", cfg.WorkDirURI))
@@ -104,8 +125,11 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 		cfg.RepoURL,
 		"-r", cfg.Revision,
 		"-c", "/workspace/nextflow.config",
-		"-work-dir", cfg.WorkDirURI,
 	}
+	if authConfig != "" {
+		args = append(args, "-c", RunnerAuthConfigPath)
+	}
+	args = append(args, "-work-dir", cfg.WorkDirURI)
 
 	if cfg.Entry != "" {
 		args = append(args, "-entry", cfg.Entry)
@@ -129,9 +153,10 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 	}
 
 	return &GeneratedConfig{
-		ConfigContent: config.String(),
-		ParamsContent: paramsContent,
-		CLIArgs:       args,
+		AuthConfigContent: authConfig,
+		ConfigContent:     config.String(),
+		ParamsContent:     paramsContent,
+		CLIArgs:           args,
 	}, nil
 }
 
@@ -170,6 +195,8 @@ func normalizeWorkflowParams(raw json.RawMessage) (map[string]any, error) {
 }
 
 // WriteConfigFiles writes the generated config and params to the workspace dir.
+//
+// It doesn't write AuthConfigContent: see WriteAuthConfig.
 func WriteConfigFiles(dir string, gen *GeneratedConfig) error {
 	configPath := filepath.Join(dir, "nextflow.config")
 	if err := os.WriteFile(configPath, []byte(gen.ConfigContent), 0644); err != nil {
@@ -183,5 +210,20 @@ func WriteConfigFiles(dir string, gen *GeneratedConfig) error {
 		}
 	}
 
+	return nil
+}
+
+// WriteAuthConfig writes AuthConfigContent, if any, to path (normally
+// RunnerAuthConfigPath), readable by the runner only.
+func WriteAuthConfig(path string, gen *GeneratedConfig) error {
+	if gen.AuthConfigContent == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create runner auth config dir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(gen.AuthConfigContent), 0o600); err != nil {
+		return fmt.Errorf("write runner auth config: %w", err)
+	}
 	return nil
 }

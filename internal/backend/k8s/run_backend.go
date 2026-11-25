@@ -33,6 +33,9 @@ type RunConfig struct {
 	EphemeralStorageLimit   string
 	Workspace               WorkspaceConfig
 	PodSecurity             PodSecurityConfig
+	// RunnerToken, if set, gives each runner its run's runner token (env
+	// runnerauth.EnvToken) for the runner callback API.
+	RunnerToken func(runID string) string
 }
 
 var _ backend.RunBackend = (*RunBackend)(nil)

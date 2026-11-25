@@ -15,6 +15,7 @@ import (
 
 	"github.com/anuragxxd/conquest/internal/adapter"
 	nfengine "github.com/anuragxxd/conquest/internal/engine/nextflow"
+	"github.com/anuragxxd/conquest/internal/runnerauth"
 
 	"github.com/anuragxxd/conquest/internal/sharedfs"
 )
@@ -77,6 +78,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		S3Endpoint:      cfg.S3Endpoint,
 		S3Region:        cfg.S3Region,
 		WorkflowParams:  workflowParams,
+		RunnerToken:     os.Getenv(runnerauth.EnvToken),
 	}
 
 	gen, err := adapter.GenerateNextflowConfig(nfCfg)
@@ -91,6 +93,9 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	}
 	if err := adapter.WriteConfigFiles(workspaceDir, gen); err != nil {
 		return fmt.Errorf("write config files: %w", err)
+	}
+	if err := adapter.WriteAuthConfig(adapter.RunnerAuthConfigPath, gen); err != nil {
+		return err
 	}
 
 	log.Info("generated nextflow config",

@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -229,5 +231,76 @@ func TestGenerateNextflowConfig_PreservesExplicitOutdir(t *testing.T) {
 	}
 	if _, ok := params["conquest_output_prefix"]; ok {
 		t.Fatal("params should not inject conquest_output_prefix")
+	}
+}
+
+func TestGenerateNextflowConfig_RunnerToken(t *testing.T) {
+	runtime, err := nfengine.ResolveRuntime("24.10.4")
+	if err != nil {
+		t.Fatalf("unexpected runtime error: %v", err)
+	}
+	base := NextflowRunConfig{
+		RunID:           "019d1234",
+		Runtime:         runtime,
+		RepoURL:         "https://github.com/org/repo",
+		Revision:        "a3f5c8e1b2d4f6a8c0e2d4f6a8b0c2d4e6f8a0b2",
+		WorkDirURI:      "s3://bucket/work/",
+		InternalTESBase: "http://conquest.svc/internal/runs/019d1234",
+		S3Endpoint:      "http://minio:9000",
+	}
+
+	gen, err := GenerateNextflowConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gen.ConfigContent, "oauthToken") || gen.AuthConfigContent != "" ||
+		strings.Contains(strings.Join(gen.CLIArgs, " "), RunnerAuthConfigPath) {
+		t.Fatalf("auth config without a runner token: %q, %v", gen.AuthConfigContent, gen.CLIArgs)
+	}
+
+	withToken := base
+	withToken.RunnerToken = "0123abcdef"
+	gen, err = GenerateNextflowConfig(withToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gen.ConfigContent, "0123abcdef") {
+		t.Fatalf("runner token in the workspace config:\n%s", gen.ConfigContent)
+	}
+	if gen.AuthConfigContent != "tes.oauthToken = '0123abcdef'\n" {
+		t.Fatalf("auth config = %q", gen.AuthConfigContent)
+	}
+	args := strings.Join(gen.CLIArgs, " ")
+	if !strings.Contains(args, "-c /workspace/nextflow.config -c "+RunnerAuthConfigPath+" ") {
+		t.Fatalf("CLI args don't load the auth config: %s", args)
+	}
+	if strings.HasPrefix(RunnerAuthConfigPath, "/workspace") {
+		t.Fatal("auth config in the workspace")
+	}
+
+	// anything else could break out of the quoted config string
+	withToken.RunnerToken = "abc'\nprocess.executor = 'local"
+	if _, err := GenerateNextflowConfig(withToken); err == nil {
+		t.Fatal("non-hex runner token accepted")
+	}
+}
+
+func TestWriteAuthConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conquest", "runner-auth.config")
+	if err := WriteAuthConfig(path, &GeneratedConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file written without a token: %v", err)
+	}
+	if err := WriteAuthConfig(path, &GeneratedConfig{AuthConfigContent: "tes.oauthToken = 'ab'\n"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v, want 0600", info.Mode().Perm())
 	}
 }

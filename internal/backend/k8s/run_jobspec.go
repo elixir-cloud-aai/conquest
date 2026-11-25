@@ -10,6 +10,7 @@ import (
 
 	"github.com/anuragxxd/conquest/internal/backend"
 	"github.com/anuragxxd/conquest/internal/domain"
+	"github.com/anuragxxd/conquest/internal/runnerauth"
 )
 
 const LabelJobType = "conquest.io/job-type"
@@ -50,6 +51,9 @@ func buildRunnerJobSpec(
 		envVars = append(envVars, corev1.EnvVar{Name: env.Name, Value: env.Value})
 	}
 	envVars = append(envVars, awsSecretEnvVars(cfg.StorageSecretName)...)
+	if cfg.RunnerToken != nil {
+		envVars = append(envVars, corev1.EnvVar{Name: runnerauth.EnvToken, Value: cfg.RunnerToken(run.RunID)})
+	}
 
 	// Inject workspace capability flag for PVC modes (Phase 1b).
 	if wsEnv := ws.RunnerEnv(); len(wsEnv) > 0 {

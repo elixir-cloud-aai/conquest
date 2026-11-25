@@ -250,6 +250,11 @@ spec:
             - name: CONQUEST_STORAGE_ISOLATION
               value: "true"
             {{- end }}
+            - name: CONQUEST_RUNNER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.runner.existingSecret | default (printf "%s-runner" (include "conquest.fullname" . | trunc 56 | trimSuffix "-")) }}
+                  key: runner-secret
             {{- if or .Values.storageGateway.enabled .Values.storageIsolation.enabled }}
             - name: CONQUEST_STORAGE_GATEWAY_SECRET
               valueFrom:
