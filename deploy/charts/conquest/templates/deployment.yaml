@@ -13,10 +13,16 @@ spec:
     metadata:
       labels:
         {{- include "conquest.selectorLabels" . | nindent 8 }}
-      {{- if .Values.federation.enabled }}
+      {{- if or .Values.federation.enabled .Values.auth.enabled }}
       annotations:
+        {{- if .Values.federation.enabled }}
         # restart the server when routing changes; it reads the file at start
         checksum/federation: {{ include (print $.Template.BasePath "/federation-secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if .Values.auth.enabled }}
+        # restart the server when the auth config changes; it reads the file at start
+        checksum/auth: {{ include (print $.Template.BasePath "/auth-configmap.yaml") . | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       {{- if .Values.global.imagePullSecrets }}
@@ -255,18 +261,42 @@ spec:
             - name: CONQUEST_FEDERATION_CONFIG
               value: /etc/conquest/federation/config.yaml
             {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: CONQUEST_AUTH_ENABLED
+              value: "true"
+            - name: CONQUEST_AUTH_SERVICE_INFO_PUBLIC
+              value: {{ ne (toString .Values.auth.serviceInfoPublic) "false" | quote }}
+            - name: CONQUEST_AUTH_CONFIG
+              value: /etc/conquest/auth/config.yaml
+            {{- end }}
           {{- if .Values.federation.enabled }}
           {{- with .Values.federation.credentialsSecret }}
           envFrom:
             - secretRef:
                 name: {{ . }}
           {{- end }}
+          {{- end }}
+          {{- if or .Values.federation.enabled .Values.auth.enabled }}
           volumeMounts:
+            {{- if .Values.federation.enabled }}
             - name: federation
               mountPath: /etc/conquest/federation
               readOnly: true
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: auth
+              mountPath: /etc/conquest/auth
+              readOnly: true
+            {{- end }}
       volumes:
+        {{- if .Values.federation.enabled }}
         - name: federation
           secret:
             secretName: {{ include "conquest.fullname" . }}-federation
+        {{- end }}
+        {{- if .Values.auth.enabled }}
+        - name: auth
+          configMap:
+            name: {{ include "conquest.fullname" . }}-auth
+        {{- end }}
           {{- end }}

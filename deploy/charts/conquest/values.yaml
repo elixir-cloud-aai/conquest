@@ -214,6 +214,35 @@ storageGateway:
 storageIsolation:
   enabled: false
 
+# Token authentication on the public WES and TES APIs (README:
+# Authentication). Off by default: the APIs are open. When on, every request
+# needs an OAuth 2.0 access token of a configured issuer, callers see only
+# their own runs, and creating runs or tasks needs a listed service client
+# or a user holding one of create.entitlements (asked at the issuer's
+# userinfo endpoint). Probes, the runner callback API and the storage
+# gateway are not affected.
+auth:
+  enabled: false
+  # Leave service-info open (a token sent there is ignored).
+  serviceInfoPublic: true
+  # Rendered verbatim to a ConfigMap mounted at /etc/conquest/auth/config.yaml
+  # (CONQUEST_AUTH_CONFIG); snake_case keys, schema in internal/auth. Holds
+  # identifiers only, never secrets. Required when enabled: issuers.
+  config:
+    issuers: []
+    # - url: https://login.example.org/oidc/   # exactly as in the tokens' iss
+    #   # jwks_uri: https://...                # default: discovery
+    #   # userinfo_uri: https://...            # default: discovery
+    #   audiences: [<front-end client ID>]     # whose user tokens are accepted
+    #   service_clients:                       # create without entitlement
+    #     - client_id: <client ID>
+    # create:
+    #   entitlements: [<exact entitlement>]    # never a prefix
+    #   entitlement_claim: eduperson_entitlement  # default
+    # algorithms: [RS256, ES256]
+    # clock_skew_seconds: 60
+    # timeout_seconds: 10
+
 # Federation: route tasks to remote GA4GH TES endpoints (Funnel, TESK,
 # Poiesis, proTES, another Conquest). Off by default: every task runs on
 # this cluster. See internal/backend/routing for the schema.
