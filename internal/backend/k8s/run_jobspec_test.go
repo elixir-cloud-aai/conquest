@@ -5,6 +5,7 @@ import (
 
 	"github.com/anuragxxd/conquest/internal/backend"
 	"github.com/anuragxxd/conquest/internal/domain"
+	"github.com/anuragxxd/conquest/internal/runnerauth"
 )
 
 // emptyDirWS returns the default emptydir workspace strategy for tests.
@@ -186,5 +187,32 @@ func TestBuildRunnerJobSpec_EmptyDirNoSharedWorkspaceEnv(t *testing.T) {
 		if env.Name == "CONQUEST_SHARED_WORKSPACE" {
 			t.Fatal("emptydir mode should not inject CONQUEST_SHARED_WORKSPACE")
 		}
+	}
+}
+
+func TestBuildRunnerJobSpec_RunnerToken(t *testing.T) {
+	run := domain.NewRun("NFL", "DSL2", "nextflow", "24.10.4", nil, "", "v1", "")
+	spec := &backend.RunnerSpec{Image: "runner:1", Command: []string{"/usr/local/bin/conquest"}}
+	tokenEnv := func(cfg RunConfig) []string {
+		job, err := buildRunnerJobSpec(run, cfg, spec, emptyDirWS(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values []string
+		for _, env := range job.Spec.Template.Spec.Containers[0].Env {
+			if env.Name == runnerauth.EnvToken {
+				values = append(values, env.Value)
+			}
+		}
+		return values
+	}
+
+	if got := tokenEnv(RunConfig{}); len(got) != 0 {
+		t.Fatalf("token without RunnerToken: %v", got)
+	}
+	var askedFor string
+	got := tokenEnv(RunConfig{RunnerToken: func(id string) string { askedFor = id; return "tok-" + id }})
+	if len(got) != 1 || got[0] != "tok-"+run.RunID || askedFor != run.RunID {
+		t.Fatalf("token env %v (asked for %q), want the run's token once", got, askedFor)
 	}
 }

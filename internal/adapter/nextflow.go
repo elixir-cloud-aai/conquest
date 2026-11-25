@@ -30,6 +30,10 @@ type NextflowRunConfig struct {
 	S3Endpoint      string   // MinIO endpoint
 	S3Region        string
 	WorkflowParams  json.RawMessage // raw params JSON from WES request
+	// RunnerToken authenticates nf-ga4gh's calls to InternalTESBase
+	// (tes.oauthToken: "Authorization: Bearer" on every call); hex digits
+	// only. Empty: no token.
+	RunnerToken string
 }
 
 // GeneratedConfig is the output of the adapter: files to write and
@@ -79,7 +83,14 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 	config.WriteString("    storeDir = null\n")
 	config.WriteString("  }\n")
 	config.WriteString("}\n")
-	config.WriteString(fmt.Sprintf("tes.endpoint = '%s'\n\n", tesEndpoint))
+	config.WriteString(fmt.Sprintf("tes.endpoint = '%s'\n", tesEndpoint))
+	if cfg.RunnerToken != "" {
+		if !isHex(cfg.RunnerToken) {
+			return nil, fmt.Errorf("runner token must be hex digits")
+		}
+		config.WriteString(fmt.Sprintf("tes.oauthToken = '%s'\n", cfg.RunnerToken))
+	}
+	config.WriteString("\n")
 
 	// Work directory.
 	config.WriteString(fmt.Sprintf("workDir = '%s'\n\n", cfg.WorkDirURI))
@@ -184,4 +195,15 @@ func WriteConfigFiles(dir string, gen *GeneratedConfig) error {
 	}
 
 	return nil
+}
+
+// isHex reports whether s consists of hex digits only, so that it can be
+// written into a quoted config string as it is.
+func isHex(s string) bool {
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
 }

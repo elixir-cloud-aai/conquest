@@ -231,3 +231,43 @@ func TestGenerateNextflowConfig_PreservesExplicitOutdir(t *testing.T) {
 		t.Fatal("params should not inject conquest_output_prefix")
 	}
 }
+
+func TestGenerateNextflowConfig_RunnerToken(t *testing.T) {
+	runtime, err := nfengine.ResolveRuntime("24.10.4")
+	if err != nil {
+		t.Fatalf("unexpected runtime error: %v", err)
+	}
+	base := NextflowRunConfig{
+		RunID:           "019d1234",
+		Runtime:         runtime,
+		RepoURL:         "https://github.com/org/repo",
+		Revision:        "a3f5c8e1b2d4f6a8c0e2d4f6a8b0c2d4e6f8a0b2",
+		WorkDirURI:      "s3://bucket/work/",
+		InternalTESBase: "http://conquest.svc/internal/runs/019d1234",
+		S3Endpoint:      "http://minio:9000",
+	}
+
+	gen, err := GenerateNextflowConfig(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gen.ConfigContent, "oauthToken") {
+		t.Fatalf("oauthToken without a runner token:\n%s", gen.ConfigContent)
+	}
+
+	withToken := base
+	withToken.RunnerToken = "0123abcdef"
+	gen, err = GenerateNextflowConfig(withToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gen.ConfigContent, "tes.oauthToken = '0123abcdef'\n") {
+		t.Fatalf("config lacks the runner token:\n%s", gen.ConfigContent)
+	}
+
+	// anything else could break out of the quoted config string
+	withToken.RunnerToken = "abc'\nprocess.executor = 'local"
+	if _, err := GenerateNextflowConfig(withToken); err == nil {
+		t.Fatal("non-hex runner token accepted")
+	}
+}

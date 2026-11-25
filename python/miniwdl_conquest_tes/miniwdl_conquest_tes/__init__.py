@@ -24,6 +24,9 @@ The plugin reads two mandatory environment variables:
 ``CONQUEST_RUN_ID``
     The WES run identifier, used for logging.
 
+and, if set, ``CONQUEST_RUNNER_TOKEN``: the run's runner token, sent as
+``Authorization: Bearer`` on every call to the internal TES endpoint.
+
 Activate the plugin with::
 
     [scheduler]
@@ -56,6 +59,15 @@ _DEFAULT_POLL_INTERVAL = 5.0
 # a task may forward it to a remote TES endpoint before Conquest answers, which
 # can take up to that endpoint's request_timeout (30s by default).
 _DEFAULT_TES_CLIENT_TIMEOUT = 120
+
+
+def _runner_token() -> Optional[str]:
+    """The run's runner token for Conquest's runner callback API.
+
+    Conquest gives the runner pod its run's token in CONQUEST_RUNNER_TOKEN;
+    without it (a Conquest without CONQUEST_RUNNER_SECRET) no token is sent.
+    """
+    return os.environ.get("CONQUEST_RUNNER_TOKEN", "").strip() or None
 
 
 def _tes_client_timeout() -> int:
@@ -222,6 +234,7 @@ class ConquestTESContainer(TaskContainer):
             self._tes_client = tes.HTTPClient(
                 url=self._tes_url,
                 timeout=_tes_client_timeout(),
+                token=_runner_token(),
             )
         return self._tes_client
 

@@ -28,6 +28,15 @@ from . import s3
 DEFAULT_TES_CLIENT_TIMEOUT = 120
 
 
+def runner_token() -> Optional[str]:
+    """The run's runner token for Conquest's runner callback API.
+
+    Conquest gives the runner pod its run's token in CONQUEST_RUNNER_TOKEN;
+    without it (a Conquest without CONQUEST_RUNNER_SECRET) no token is sent.
+    """
+    return os.environ.get("CONQUEST_RUNNER_TOKEN", "").strip() or None
+
+
 def tes_client_timeout() -> int:
     """The TES client timeout in seconds, from the environment."""
     raw = os.environ.get("CONQUEST_TES_CLIENT_TIMEOUT", "").strip()
@@ -176,7 +185,9 @@ class Executor(RemoteExecutor):
         )
         if not tes_url:
             raise WorkflowError("TES URL is required")
-        self.tes_client = tes.HTTPClient(url=tes_url, timeout=tes_client_timeout())
+        self.tes_client = tes.HTTPClient(
+            url=tes_url, timeout=tes_client_timeout(), token=runner_token()
+        )
         self.s3_client = s3.make_client()
 
     def run_job(self, job: JobExecutorInterface):
