@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anuragxxd/conquest/internal/objstore"
 )
@@ -17,10 +18,18 @@ import (
 // Client is the filer's object store in a task pod without S3 credentials:
 // it asks the storage gateway for a presigned URL per object, then reads or
 // writes there. Delete is not offered.
+//
+// Connection errors and 429/5xx answers of the gateway or S3 are retried with
+// backoff (about a minute in all), so a restart of Conquest doesn't fail
+// tasks; uploads only if their reader can seek back.
 type Client struct {
-	root string
-	http *http.Client
+	root    string
+	http    *http.Client
+	backoff []time.Duration
 }
+
+// defaultBackoff are the waits before each retry.
+var defaultBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
 
 var _ objstore.Client = (*Client)(nil)
 
@@ -28,13 +37,15 @@ var _ objstore.Client = (*Client)(nil)
 // storagegw.Gateway.TaskRoot). A nil hc uses a default client.
 func NewClient(root string, hc *http.Client) *Client {
 	if hc == nil {
-		hc = &http.Client{}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ResponseHeaderTimeout = time.Minute
+		hc = &http.Client{Transport: transport}
 	}
 	noRedirect := *hc
 	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &Client{root: strings.TrimRight(root, "/"), http: &noRedirect}
+	return &Client{root: strings.TrimRight(root, "/"), http: &noRedirect, backoff: defaultBackoff}
 }
 
 // ClientFromEnv returns a client for the capability URL in
@@ -104,7 +115,9 @@ func (c *Client) Delete(_ context.Context, bucket, key string) error {
 // "a/b" lists "a/b/...", not "a/bc".
 func (c *Client) ListPrefix(ctx context.Context, bucket, prefix string) ([]string, error) {
 	dir := strings.TrimRight(prefix, "/") + "/"
-	resp, err := c.do(ctx, http.MethodGet, c.objectURL(bucket, dir), nil, 0)
+	resp, err := c.retry(ctx, nil, 0, func() (*http.Response, error) {
+		return c.do(ctx, http.MethodGet, c.objectURL(bucket, dir), nil, 0)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -122,16 +135,26 @@ func (c *Client) ListPrefix(ctx context.Context, bucket, prefix string) ([]strin
 }
 
 // presigned asks the gateway where to send method for the object, then sends
-// it there. The gateway answers 307 without reading a body, so the body goes
-// only to the presigned URL.
+// it there, retrying both steps. The gateway answers 307 without reading a
+// body, so the body goes only to the presigned URL.
 func (c *Client) presigned(ctx context.Context, method, bucket, key string, body io.Reader, size int64) (*http.Response, error) {
+	return c.retry(ctx, body, size, func() (*http.Response, error) {
+		return c.presignedOnce(ctx, method, bucket, key, body, size)
+	})
+}
+
+func (c *Client) presignedOnce(ctx context.Context, method, bucket, key string, body io.Reader, size int64) (*http.Response, error) {
 	resp, err := c.do(ctx, method, c.objectURL(bucket, key), nil, 0)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusTemporaryRedirect {
 		defer resp.Body.Close()
-		return nil, statusError(strings.ToLower(method), bucket, key, resp)
+		err := statusError(strings.ToLower(method), bucket, key, resp)
+		if retryableStatus(resp.StatusCode) {
+			return nil, &retryableError{err}
+		}
+		return nil, err
 	}
 	resp.Body.Close()
 	target, err := resp.Location()
@@ -158,11 +181,66 @@ func (c *Client) do(ctx context.Context, method, rawURL string, body io.Reader, 
 		// never log the URL: it is a capability
 		var uerr *url.Error
 		if errors.As(err, &uerr) {
-			return nil, fmt.Errorf("%s %s: %w", strings.ToLower(method), redact(rawURL), uerr.Err)
+			err = fmt.Errorf("%s %s: %w", strings.ToLower(method), redact(rawURL), uerr.Err)
 		}
-		return nil, err
+		return nil, &retryableError{err}
 	}
 	return resp, nil
+}
+
+// retryableError marks a failure worth another attempt.
+type retryableError struct{ err error }
+
+func (e *retryableError) Error() string { return e.err.Error() }
+func (e *retryableError) Unwrap() error { return e.err }
+
+func retryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// retry calls once until it succeeds, fails for good, or the backoff runs
+// out. A body is sent again only if it can seek back to where it started.
+func (c *Client) retry(ctx context.Context, body io.Reader, size int64, once func() (*http.Response, error)) (*http.Response, error) {
+	rewindable := body == nil || size == 0
+	seeker, _ := body.(io.Seeker)
+	var start int64
+	if !rewindable && seeker != nil {
+		if pos, err := seeker.Seek(0, io.SeekCurrent); err == nil {
+			start, rewindable = pos, true
+		}
+	}
+	for attempt := 0; ; attempt++ {
+		resp, err := once()
+		var re *retryableError
+		again := errors.As(err, &re) || (err == nil && retryableStatus(resp.StatusCode))
+		if !again || !rewindable || attempt >= len(c.backoff) || ctx.Err() != nil {
+			if re != nil {
+				return nil, re.err
+			}
+			return resp, err
+		}
+		if resp != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+		}
+		if seeker != nil && !(body == nil || size == 0) {
+			if _, err := seeker.Seek(start, io.SeekStart); err != nil {
+				return nil, err
+			}
+		}
+		timer := time.NewTimer(c.backoff[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (c *Client) objectURL(bucket, key string) string {

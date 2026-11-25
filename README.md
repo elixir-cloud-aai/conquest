@@ -287,6 +287,9 @@ after the task ends.
   run's owner.
 - The bound uses the current `CONQUEST_LAYOUT_VERSION`: drain runs before
   changing it.
+- Task staging depends on Conquest being up: the filer retries connection
+  errors and `429`/`5xx` for about a minute, so a restart or a rolling
+  upgrade is fine, a longer outage fails the tasks that stage meanwhile.
 - Uploads are single presigned `PUT`s, so S3's limit for one `PUT` applies to
   each output file (5 GiB on AWS and Ceph RGW by default).
 - Not covered: runner pods. The engines read and write the run's work

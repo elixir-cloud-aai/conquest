@@ -134,7 +134,14 @@ func setup(t *testing.T) (*Client, *fakeS3) {
 	gw.Routes(r)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return NewClient(gw.TaskRoot(srv.URL, "t1"), nil), s3
+	return fastClient(gw.TaskRoot(srv.URL, "t1")), s3
+}
+
+// fastClient retries without waiting.
+func fastClient(root string) *Client {
+	c := NewClient(root, nil)
+	c.backoff = []time.Duration{time.Millisecond, time.Millisecond}
+	return c
 }
 
 func TestGet(t *testing.T) {
@@ -221,7 +228,7 @@ func TestErrorsHideCapabilities(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), sig) {
 		t.Errorf("error = %v", err)
 	}
-	unreachable := NewClient("http://127.0.0.1:1/storage/v1/t/t1/"+sig, nil)
+	unreachable := fastClient("http://127.0.0.1:1/storage/v1/t/t1/" + sig)
 	_, err = unreachable.Get(context.Background(), "conquest", "k")
 	if err == nil || strings.Contains(err.Error(), sig) {
 		t.Errorf("connection error = %v", err)
@@ -278,7 +285,62 @@ func errorServer(t *testing.T, status int, location, body string) *Client {
 		_, _ = io.WriteString(w, body)
 	}))
 	t.Cleanup(srv.Close)
-	return NewClient(srv.URL+"/storage/v1/t/t1/sig", nil)
+	return fastClient(srv.URL + "/storage/v1/t/t1/sig")
+}
+
+// flakyGateway fails the first n requests with 503, then redirects to a
+// store that keeps what is PUT.
+func flakyGateway(t *testing.T, n int) (*Client, *map[string]string, *int) {
+	t.Helper()
+	var mu sync.Mutex
+	stored := map[string]string{}
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if obj, ok := strings.CutPrefix(r.URL.Path, "/storage/v1/t/t1/sig/"); ok {
+			calls++
+			if calls <= n {
+				http.Error(w, "restarting", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Location", "/s3/"+obj)
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+		data, _ := io.ReadAll(r.Body)
+		stored[strings.TrimPrefix(r.URL.Path, "/s3/")] = string(data)
+	}))
+	t.Cleanup(srv.Close)
+	return fastClient(srv.URL + "/storage/v1/t/t1/sig"), &stored, &calls
+}
+
+func TestRetries(t *testing.T) {
+	ctx := context.Background()
+
+	c, stored, calls := flakyGateway(t, 2)
+	if err := c.Put(ctx, "b", "k", strings.NewReader("data"), 4); err != nil {
+		t.Fatalf("put after two 503s: %v", err)
+	}
+	if (*stored)["b/k"] != "data" || *calls != 3 {
+		t.Errorf("stored = %v after %d calls", *stored, *calls)
+	}
+
+	c, _, calls = flakyGateway(t, 10)
+	if err := c.Put(ctx, "b", "k", strings.NewReader("data"), 4); err == nil || *calls != 3 {
+		t.Errorf("backoff exhausted: err = %v after %d calls", err, *calls)
+	}
+
+	// a reader that can't seek back is sent once
+	c, _, calls = flakyGateway(t, 1)
+	if err := c.Put(ctx, "b", "k", io.MultiReader(strings.NewReader("data")), 4); err == nil || *calls != 1 {
+		t.Errorf("unseekable body: err = %v after %d calls", err, *calls)
+	}
+
+	// a refusal is final
+	if _, err := errorServer(t, http.StatusForbidden, "", "no").Get(ctx, "b", "k"); err == nil {
+		t.Error("403: want an error")
+	}
 }
 
 func TestClientErrors(t *testing.T) {
