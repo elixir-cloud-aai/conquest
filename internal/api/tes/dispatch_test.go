@@ -14,6 +14,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/backend"
 	"github.com/anuragxxd/conquest/internal/domain"
 	"github.com/anuragxxd/conquest/internal/repository"
+	"github.com/anuragxxd/conquest/internal/repository/pg"
 )
 
 type memTasks struct {
@@ -30,7 +31,7 @@ func (m *memTasks) Get(_ context.Context, id string) (*domain.Task, error) {
 	if t, ok := m.tasks[id]; ok {
 		return t, nil
 	}
-	return nil, errors.New("not found")
+	return nil, pg.ErrNotFound
 }
 
 func (m *memTasks) UpdateState(_ context.Context, id string, from, to domain.State) error {

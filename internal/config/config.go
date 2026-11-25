@@ -115,6 +115,12 @@ type Config struct {
 	// to its run's root (see internal/isolation). Needs
 	// StorageGatewaySecret.
 	StorageIsolation bool
+
+	// RunnerSecret derives each run's runner token (see
+	// internal/runnerauth; at least 32 bytes). Set: the runner callback API
+	// accepts only the token of the run in its path. Empty: that API is
+	// open, which AuthEnabled refuses.
+	RunnerSecret string
 }
 
 // defaultTaskMinRAMGb floors task memory at 128 MiB. Workflows compute memory
@@ -175,6 +181,7 @@ func Load() (*Config, error) {
 		AuthConfigFile:                envOr("CONQUEST_AUTH_CONFIG", "/etc/conquest/auth/config.yaml"),
 		StorageGatewayURL:             strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_GATEWAY_URL")),
 		StorageGatewaySecret:          os.Getenv("CONQUEST_STORAGE_GATEWAY_SECRET"),
+		RunnerSecret:                  os.Getenv("CONQUEST_RUNNER_SECRET"),
 		S3PublicEndpoint:              strings.TrimSpace(os.Getenv("CONQUEST_S3_PUBLIC_ENDPOINT")),
 		StorageIsolation:              envBoolOr("CONQUEST_STORAGE_ISOLATION", false),
 		K8sNamespace:                  envOr("CONQUEST_K8S_NAMESPACE", "conquest"),
@@ -274,6 +281,13 @@ func Load() (*Config, error) {
 		if c.S3Endpoint == "" {
 			return nil, fmt.Errorf("CONQUEST_STORAGE_ISOLATION needs CONQUEST_S3_ENDPOINT")
 		}
+	}
+
+	if c.RunnerSecret != "" && len(c.RunnerSecret) < 32 {
+		return nil, fmt.Errorf("CONQUEST_RUNNER_SECRET must be at least 32 bytes")
+	}
+	if c.AuthEnabled && c.RunnerSecret == "" {
+		return nil, fmt.Errorf("CONQUEST_AUTH_ENABLED needs CONQUEST_RUNNER_SECRET: without it, the runner callback API reaches every run unauthenticated")
 	}
 
 	// Pod security validation.

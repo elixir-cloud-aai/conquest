@@ -37,6 +37,8 @@ type Handler struct {
 	// dispatcher submits created tasks in the background; nil submits
 	// them before answering (the behaviour before asynchronous dispatch).
 	dispatcher Notifier
+	// runnerAuth guards the internal routes; nil leaves them open.
+	runnerAuth func(http.Handler) http.Handler
 }
 
 // Notifier is told that tasks are waiting to be dispatched.
@@ -74,16 +76,28 @@ func (h *Handler) Routes(r chi.Router) {
 
 // InternalRoutes registers run-scoped internal TES routes.
 // These are used by the Nextflow runner to submit tasks bound to a specific
-// WES run, without relying on TES tags or stub-run creation.
+// WES run, without relying on TES tags or stub-run creation. With
+// SetRunnerAuth, every request needs the runner credential of the run in
+// its path; tasks of other runs are not found.
 func (h *Handler) InternalRoutes(r chi.Router) {
-	r.Post("/internal/runs/{run_id}/ga4gh/tes/v1/tasks", h.CreateTaskForRun)
-	r.Get("/internal/runs/{run_id}/ga4gh/tes/v1/tasks/{id}", h.GetTask)
-	r.Post("/internal/runs/{run_id}/ga4gh/tes/v1/tasks/{id}:cancel", h.CancelTask)
-	// Service info — same as public. The non-/v1 alias is for nf-ga4gh's
-	// generated client, which hardcodes /service-info relative to tes.endpoint.
-	r.Get("/internal/runs/{run_id}/ga4gh/tes/v1/service-info", h.GetServiceInfo)
-	r.Get("/internal/runs/{run_id}/ga4gh/tes/service-info", h.GetServiceInfo)
+	r.Route("/internal/runs/{run_id}", func(r chi.Router) {
+		if h.runnerAuth != nil {
+			r.Use(h.runnerAuth)
+		}
+		r.Post("/ga4gh/tes/v1/tasks", h.CreateTaskForRun)
+		r.Get("/ga4gh/tes/v1/tasks/{id}", h.GetTaskForRun)
+		r.Post("/ga4gh/tes/v1/tasks/{id}:cancel", h.CancelTaskForRun)
+		// Service info — same as public. The non-/v1 alias is for nf-ga4gh's
+		// generated client, which hardcodes /service-info relative to tes.endpoint.
+		r.Get("/ga4gh/tes/v1/service-info", h.GetServiceInfo)
+		r.Get("/ga4gh/tes/service-info", h.GetServiceInfo)
+	})
 }
+
+// SetRunnerAuth puts authn (e.g. runnerauth.Tokens' Middleware) in front
+// of the internal routes; it sees the chi URL parameter "run_id". Without
+// it the internal routes are open.
+func (h *Handler) SetRunnerAuth(authn func(http.Handler) http.Handler) { h.runnerAuth = authn }
 
 func (h *Handler) GetServiceInfo(w http.ResponseWriter, r *http.Request) {
 	info := ServiceInfo{
@@ -349,6 +363,16 @@ func ensureInternalRunTaskDefaults(req *Task, run *domain.Run) {
 }
 
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
+	h.getTask(w, r, "")
+}
+
+// GetTaskForRun is GetTask on the runner callback API: a task of another
+// run than the path's is not found.
+func (h *Handler) GetTaskForRun(w http.ResponseWriter, r *http.Request) {
+	h.getTask(w, r, chi.URLParam(r, "run_id"))
+}
+
+func (h *Handler) getTask(w http.ResponseWriter, r *http.Request, runID string) {
 	id := chi.URLParam(r, "id")
 	// Handle the ":cancel" suffix case for chi routing.
 	id = strings.TrimSuffix(id, ":cancel")
@@ -358,22 +382,35 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 		view = "MINIMAL"
 	}
 
-	task, err := h.tasks.Get(r.Context(), id)
-	if errors.Is(err, pg.ErrNotFound) {
-		// Try by TES ID.
-		task, err = h.tasks.GetByTESID(r.Context(), id)
-	}
-	if err != nil {
-		if errors.Is(err, pg.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "task not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	task, ok := h.lookupTask(w, r, id, runID)
+	if !ok {
 		return
 	}
 
 	resp := domainTaskToTES(task, view)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// lookupTask finds a task by Conquest or TES ID and, with a runID, only
+// among that run's tasks; it answers the request itself if there is none.
+func (h *Handler) lookupTask(w http.ResponseWriter, r *http.Request, id, runID string) (*domain.Task, bool) {
+	task, err := h.tasks.Get(r.Context(), id)
+	if errors.Is(err, pg.ErrNotFound) {
+		// Try by TES ID.
+		task, err = h.tasks.GetByTESID(r.Context(), id)
+	}
+	if err == nil && runID != "" && task.RunID != runID {
+		err = pg.ErrNotFound
+	}
+	if err != nil {
+		if errors.Is(err, pg.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return nil, false
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return nil, false
+	}
+	return task, true
 }
 
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
@@ -395,18 +432,20 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
+	h.cancelTask(w, r, "")
+}
+
+// CancelTaskForRun is CancelTask on the runner callback API: a task of
+// another run than the path's is not found.
+func (h *Handler) CancelTaskForRun(w http.ResponseWriter, r *http.Request) {
+	h.cancelTask(w, r, chi.URLParam(r, "run_id"))
+}
+
+func (h *Handler) cancelTask(w http.ResponseWriter, r *http.Request, runID string) {
 	id := chi.URLParam(r, "id")
 
-	task, err := h.tasks.Get(r.Context(), id)
-	if errors.Is(err, pg.ErrNotFound) {
-		task, err = h.tasks.GetByTESID(r.Context(), id)
-	}
-	if err != nil {
-		if errors.Is(err, pg.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "task not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+	task, ok := h.lookupTask(w, r, id, runID)
+	if !ok {
 		return
 	}
 

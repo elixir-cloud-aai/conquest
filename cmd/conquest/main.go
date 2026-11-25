@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/objstore"
 	"github.com/anuragxxd/conquest/internal/reconciler"
 	"github.com/anuragxxd/conquest/internal/repository/pg"
+	"github.com/anuragxxd/conquest/internal/runnerauth"
 	"github.com/anuragxxd/conquest/internal/storage"
 	"github.com/anuragxxd/conquest/internal/storagegw"
 	"github.com/anuragxxd/conquest/internal/taskpolicy"
@@ -247,6 +249,18 @@ func run(log *slog.Logger) error {
 		)
 	}
 
+	// Runner tokens for the runner callback API.
+	var runnerTokens *runnerauth.Tokens
+	if cfg.RunnerSecret != "" {
+		runnerTokens, err = runnerauth.New([]byte(cfg.RunnerSecret))
+		if err != nil {
+			return fmt.Errorf("CONQUEST_RUNNER_SECRET: %w", err)
+		}
+		log.Info("runner callback API needs per-run runner tokens")
+	} else {
+		log.Warn("CONQUEST_RUNNER_SECRET is not set: the runner callback API (/internal/runs/...) is open and reaches every run; keep it off public routes")
+	}
+
 	// Run-level backend (Nextflow runner Jobs).
 	var runBackend *k8sbackend.RunBackend
 	if clientset != nil {
@@ -259,6 +273,9 @@ func run(log *slog.Logger) error {
 			EphemeralStorageLimit:   cfg.RunnerEphemeralStorageLimit,
 			Workspace:               wsCfg,
 			PodSecurity:             podSecurity,
+		}
+		if runnerTokens != nil {
+			runBackendCfg.RunnerToken = runnerTokens.Token
 		}
 		runBackend = k8sbackend.NewRunBackend(clientset, runBackendCfg, log)
 		log.Info("run backend enabled",
@@ -319,6 +336,18 @@ func run(log *slog.Logger) error {
 	// HTTP handlers.
 	wesHandler := wes.NewHandler(runCtrl)
 	tesHandler := tes.NewHandler(runStore, taskStore, eventStore, tasks)
+	if runnerTokens != nil {
+		tesHandler.SetRunnerAuth(runnerTokens.Middleware(func(ctx context.Context, runID string) (bool, error) {
+			run, err := runStore.Get(ctx, runID)
+			if errors.Is(err, pg.ErrNotFound) {
+				return false, runnerauth.ErrRunNotFound
+			}
+			if err != nil {
+				return false, err
+			}
+			return run.State.IsTerminal(), nil
+		}))
+	}
 	if gatewayID != "" {
 		tesHandler.SetGatewayID(gatewayID)
 	}
