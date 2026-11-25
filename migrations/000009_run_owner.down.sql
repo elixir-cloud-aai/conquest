@@ -1,0 +1,7 @@
+BEGIN;
+
+DROP INDEX IF EXISTS idx_runs_owner_created;
+ALTER TABLE runs DROP COLUMN IF EXISTS auth_context;
+ALTER TABLE runs DROP COLUMN IF EXISTS owner;
+
+COMMIT;
