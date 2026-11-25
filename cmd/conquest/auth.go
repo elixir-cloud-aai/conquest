@@ -18,6 +18,13 @@ var serviceInfoRoutes = map[string]bool{
 	"/ga4gh/tes/service-info":    true,
 }
 
+// createRoutes are the method and route pattern of the requests that
+// create runs or tasks: the callers need to be entitled to create.
+var createRoutes = map[string]bool{
+	http.MethodPost + " /ga4gh/wes/v1/runs":  true,
+	http.MethodPost + " /ga4gh/tes/v1/tasks": true,
+}
+
 // newAuthMiddleware returns the token validation middleware for the public
 // APIs, or nil when authentication is off.
 func newAuthMiddleware(ctx context.Context, cfg *config.Config, log *slog.Logger) (func(http.Handler) http.Handler, error) {
@@ -36,11 +43,13 @@ func newAuthMiddleware(ctx context.Context, cfg *config.Config, log *slog.Logger
 	if cfg.AuthServiceInfoPublic {
 		a.Public = isServiceInfo
 	}
+	a.Create = isCreate
 	issuers := make([]string, len(authCfg.Issuers))
 	for i, iss := range authCfg.Issuers {
 		issuers[i] = iss.URL
 	}
-	log.Info("authentication enabled", "issuers", issuers, "service_info_public", cfg.AuthServiceInfoPublic)
+	log.Info("authentication enabled", "issuers", issuers, "service_info_public", cfg.AuthServiceInfoPublic,
+		"create_entitlements", len(authCfg.Create.Entitlements))
 	return a.Middleware, nil
 }
 
@@ -50,4 +59,11 @@ func newAuthMiddleware(ctx context.Context, cfg *config.Config, log *slog.Logger
 func isServiceInfo(r *http.Request) bool {
 	rctx := chi.RouteContext(r.Context())
 	return r.Method == http.MethodGet && rctx != nil && serviceInfoRoutes[rctx.RoutePattern()]
+}
+
+// isCreate reports a request that the router has matched to a route that
+// creates runs or tasks, by route pattern like isServiceInfo.
+func isCreate(r *http.Request) bool {
+	rctx := chi.RouteContext(r.Context())
+	return rctx != nil && createRoutes[r.Method+" "+rctx.RoutePattern()]
 }

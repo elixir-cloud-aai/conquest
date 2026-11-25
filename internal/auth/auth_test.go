@@ -41,6 +41,11 @@ type testIdP struct {
 	discovery string // issuer named by the discovery document; "" = own URL
 	down      bool   // discovery answers 500
 	rsaUse    string // "use" of the RSA key; "" = sig
+
+	// userinfo endpoint (create.go)
+	userinfo    userinfoStub
+	noUserinfo  bool   // discovery names no userinfo_endpoint
+	userinfoURL string // userinfo_endpoint named by discovery; "" = own
 }
 
 func newTestIdP(t *testing.T) *testIdP {
@@ -64,8 +69,16 @@ func newTestIdP(t *testing.T) *testIdP {
 		if iss == "" {
 			iss = idp.issuer()
 		}
-		json.NewEncoder(w).Encode(map[string]string{"issuer": iss, "jwks_uri": idp.srv.URL + "/jwks"})
+		doc := map[string]string{"issuer": iss, "jwks_uri": idp.srv.URL + "/jwks"}
+		switch {
+		case idp.userinfoURL != "":
+			doc["userinfo_endpoint"] = idp.userinfoURL
+		case !idp.noUserinfo:
+			doc["userinfo_endpoint"] = idp.srv.URL + "/userinfo"
+		}
+		json.NewEncoder(w).Encode(doc)
 	})
+	mux.HandleFunc("/userinfo", idp.userinfo.serve)
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
 		idp.mu.Lock()
 		rsaKey, kid, delay := idp.rsaKey, idp.kid(), idp.delay

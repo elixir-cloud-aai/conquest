@@ -392,20 +392,73 @@ does not start with an invalid file:
 issuers:
   - url: https://login.aai.lifescience-ri.eu/oidc/  # exactly as in iss
     # jwks_uri: https://...                        # default: discovery
+    # userinfo_uri: https://...                    # default: discovery
     audiences: [<front-end client ID>]             # required
     service_clients:                               # optional
       - client_id: <client ID>
+create:                     # who may create runs and tasks (below)
+  entitlements: [<entitlement>]               # exact values
+  entitlement_claim: eduperson_entitlement    # default
 algorithms: [RS256, ES256]  # default
 clock_skew_seconds: 60      # default
-timeout_seconds: 10         # default and maximum; discovery and key set requests
+timeout_seconds: 10         # default and maximum; discovery, key set and userinfo requests
 ```
 
-Issuer and key set URLs must use https (plain http only to a loopback
-host), also after redirects, and issuer URLs must not contain `|` (it
-separates issuer and subject in run owners). Tokens must carry `exp`,
-`iat` and `sub`. So far Conquest only authenticates callers; who may create runs (an
-entitlement check at submit) is not enforced yet, so any accepted caller can
-submit. The Helm chart can't switch authentication on yet (the environment
+Issuer, key set and userinfo URLs must use https (plain http only to a
+loopback host), also after redirects, and issuer URLs must not contain `|`
+(it separates issuer and subject in run owners). Tokens must carry `exp`,
+`iat` and `sub`.
+
+#### Who may create runs and tasks
+
+Creating a run (`POST /ga4gh/wes/v1/runs`) or a task through the public
+TES API (`POST /ga4gh/tes/v1/tasks`) needs, besides a valid token, one of:
+
+- the caller is a listed **service client** using its own token (as
+  above): it may create without an entitlement;
+- the caller is a **user** whose entitlements contain one of
+  `create.entitlements`. Conquest asks the issuer's userinfo endpoint
+  (`userinfo_uri`, or `userinfo_endpoint` from discovery) with the
+  request's own token, and reads the claim `create.entitlement_claim`
+  (a list of strings or one string). Values are compared as exact strings,
+  never as prefixes; the userinfo `sub` must equal the token's `sub`.
+
+Any other caller with a valid token is refused with 403. That includes a
+client that isn't listed (`sub == client_id`; the issuer isn't asked for
+it) whose token passes validation because its `aud` contains one of the
+issuer's `audiences`; otherwise its token fails validation already (401).
+Without
+`create.entitlements`, only listed service clients create. The server
+doesn't start if neither entitlements nor service clients are configured,
+since nobody could create runs.
+
+Only creates check entitlements: listing, reading and cancelling own runs
+and tasks need a valid token only, so a caller whose entitlement is revoked
+keeps access to the runs they created, and an outage of the userinfo
+endpoint doesn't block them. Nothing is cached: every create asks the
+userinfo endpoint again, so a revoked entitlement takes effect on the next
+create. Answers:
+
+- 403 (body `forbidden`, the reason only in the log): no configured
+  entitlement, or a token of a client that isn't listed;
+- 401 with `WWW-Authenticate: Bearer error="invalid_token"`: the userinfo
+  endpoint refuses the token (401 or 403), or its `sub` is missing or
+  differs from the token's;
+- 503: the userinfo endpoint can't be reached, times out
+  (`timeout_seconds`), answers anything else than 200 with a single JSON
+  object of at most 1 MiB,
+  or isn't configured and can't be discovered (retried 10 seconds after a
+  failed discovery). The userinfo request follows no redirects (a 3xx
+  answers 503), so the user's token goes only to the userinfo endpoint.
+
+Userinfo discovery is separate from the key set and happens on the first
+create, so its failure never affects reads.
+
+The entitlements must be ones the issuer releases at userinfo for the
+front ends' clients (an IdP may release them only there, not in access
+tokens).
+
+The Helm chart can't switch authentication on yet (the environment
 variables and the config file mount come in a follow-up).
 
 The runner callback API (`/internal/runs/...`) has no authentication yet
@@ -419,6 +472,13 @@ longer visible through the API (operators can still inspect and delete them
 in PostgreSQL). Workflow runners call the unauthenticated runner callback
 API, so runs keep working; drain active runs before switching
 authentication on all the same, so that no run straddles the change.
+
+Upgrading from a version without the create rule: an auth config needs
+`create.entitlements` or at least one service client, or the server
+doesn't start; until then, any authenticated caller could create. Replicas
+still running the old version accept creates by any authenticated caller
+until they are replaced, so with more than one replica, roll out with
+the Deployment strategy `Recreate` (or scale to one first).
 
 ## Federation: Remote TES Endpoints
 
@@ -638,7 +698,7 @@ No config files.
 | `CONQUEST_K8S_NAMESPACE`            | `conquest`           | Kubernetes namespace for Jobs     |
 | `CONQUEST_AUTH_ENABLED`             | `false`              | Require bearer tokens             |
 | `CONQUEST_AUTH_SERVICE_INFO_PUBLIC` | `true`               | Open `service-info` with auth on  |
-| `CONQUEST_AUTH_CONFIG`              | see Authentication   | Issuers and audiences (YAML)      |
+| `CONQUEST_AUTH_CONFIG`              | see Authentication   | Issuers, audiences, create rule (YAML) |
 | `CONQUEST_WORKSPACE_MODE`           | `emptydir`           | `emptydir`, `pvc`, or `objectfs`  |
 | `CONQUEST_WORKSPACE_ACCESS_MODE`    | `RWX`                | `RWX` or `RWO` (when mode=pvc)     |
 | `CONQUEST_WORKSPACE_SIZE`           | `10Gi`               | PVC / objectfs volume size        |
