@@ -34,8 +34,17 @@ func ParseHelperResources(raw string) (corev1.ResourceRequirements, error) {
 		return corev1.ResourceRequirements{}, fmt.Errorf("parse helper container resources: trailing data after the JSON object")
 	}
 
+	// Checked here so that a typo stops the server at startup instead of
+	// failing every task's Job at the API server.
+	if len(res.Claims) > 0 {
+		return corev1.ResourceRequirements{}, fmt.Errorf("helper container resources: claims are not supported")
+	}
 	for _, list := range []corev1.ResourceList{res.Requests, res.Limits} {
-		for name, q := range list {
+		for _, name := range sortedResourceNames(list) {
+			q := list[name]
+			if !helperResourceNames[name] {
+				return corev1.ResourceRequirements{}, fmt.Errorf("helper container resources: unsupported resource %q (cpu, memory, ephemeral-storage)", name)
+			}
 			if q.Sign() < 0 {
 				return corev1.ResourceRequirements{}, fmt.Errorf("helper container resources: %s must not be negative, got %s", name, q.String())
 			}
@@ -49,6 +58,13 @@ func ParseHelperResources(raw string) (corev1.ResourceRequirements, error) {
 		}
 	}
 	return res, nil
+}
+
+// helperResourceNames are the resources a helper container may request.
+var helperResourceNames = map[corev1.ResourceName]bool{
+	corev1.ResourceCPU:              true,
+	corev1.ResourceMemory:           true,
+	corev1.ResourceEphemeralStorage: true,
 }
 
 // helperResources returns a copy of the configured helper container

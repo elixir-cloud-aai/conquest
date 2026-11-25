@@ -145,6 +145,10 @@ func TestParseHelperResources(t *testing.T) {
 			wantErr: "memory request 1Gi exceeds its limit 512Mi",
 		},
 		{name: "negative", raw: `{"limits": {"cpu": "-1"}}`, wantErr: "negative"},
+		{name: "ephemeral storage", raw: `{"limits": {"cpu": "1", "ephemeral-storage": "1Gi"}}`, want: "1"},
+		{name: "misspelled resource", raw: `{"limits": {"cpus": "1"}}`, wantErr: `unsupported resource "cpus"`},
+		{name: "other resource", raw: `{"requests": {"hugepages-2Mi": "1Gi"}}`, wantErr: "unsupported resource"},
+		{name: "claims", raw: `{"claims": [{"name": "gpu"}]}`, wantErr: "claims"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
