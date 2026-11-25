@@ -33,16 +33,25 @@ type NextflowRunConfig struct {
 	WorkflowParams  json.RawMessage // raw params JSON from WES request
 	// RunnerToken authenticates nf-ga4gh's calls to InternalTESBase
 	// (tes.oauthToken: "Authorization: Bearer" on every call); hex digits
-	// only. Empty: no token.
+	// only. It goes into AuthConfigContent, never into the workspace.
+	// Empty: no token.
 	RunnerToken string
 }
+
+// RunnerAuthConfigPath is where the runner writes AuthConfigContent: in
+// the runner pod's own /tmp (an emptyDir), not in the workspace, which
+// other pods (task pods, S3 in objectfs mode) can read.
+const RunnerAuthConfigPath = "/tmp/conquest/runner-auth.config"
 
 // GeneratedConfig is the output of the adapter: files to write and
 // command-line args for the `nextflow run` invocation.
 type GeneratedConfig struct {
-	ConfigContent string   // nextflow.config file content
-	ParamsContent string   // params.json file content (empty if no params)
-	CLIArgs       []string // full `nextflow run ...` args
+	ConfigContent string // nextflow.config file content
+	// AuthConfigContent is the config with the runner token (empty
+	// without one), for RunnerAuthConfigPath; CLIArgs load it.
+	AuthConfigContent string
+	ParamsContent     string   // params.json file content (empty if no params)
+	CLIArgs           []string // full `nextflow run ...` args
 }
 
 // GenerateNextflowConfig produces the Nextflow configuration and CLI args
@@ -84,14 +93,14 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 	config.WriteString("    storeDir = null\n")
 	config.WriteString("  }\n")
 	config.WriteString("}\n")
-	config.WriteString(fmt.Sprintf("tes.endpoint = '%s'\n", tesEndpoint))
+	config.WriteString(fmt.Sprintf("tes.endpoint = '%s'\n\n", tesEndpoint))
+	authConfig := ""
 	if cfg.RunnerToken != "" {
 		if _, err := hex.DecodeString(cfg.RunnerToken); err != nil {
 			return nil, fmt.Errorf("runner token must be hex digits")
 		}
-		config.WriteString(fmt.Sprintf("tes.oauthToken = '%s'\n", cfg.RunnerToken))
+		authConfig = fmt.Sprintf("tes.oauthToken = '%s'\n", cfg.RunnerToken)
 	}
-	config.WriteString("\n")
 
 	// Work directory.
 	config.WriteString(fmt.Sprintf("workDir = '%s'\n\n", cfg.WorkDirURI))
@@ -116,8 +125,11 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 		cfg.RepoURL,
 		"-r", cfg.Revision,
 		"-c", "/workspace/nextflow.config",
-		"-work-dir", cfg.WorkDirURI,
 	}
+	if authConfig != "" {
+		args = append(args, "-c", RunnerAuthConfigPath)
+	}
+	args = append(args, "-work-dir", cfg.WorkDirURI)
 
 	if cfg.Entry != "" {
 		args = append(args, "-entry", cfg.Entry)
@@ -141,9 +153,10 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 	}
 
 	return &GeneratedConfig{
-		ConfigContent: config.String(),
-		ParamsContent: paramsContent,
-		CLIArgs:       args,
+		AuthConfigContent: authConfig,
+		ConfigContent:     config.String(),
+		ParamsContent:     paramsContent,
+		CLIArgs:           args,
 	}, nil
 }
 

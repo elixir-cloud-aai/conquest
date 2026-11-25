@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/anuragxxd/conquest/internal/adapter"
@@ -93,6 +94,14 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	}
 	if err := adapter.WriteConfigFiles(workspaceDir, gen); err != nil {
 		return fmt.Errorf("write config files: %w", err)
+	}
+	if gen.AuthConfigContent != "" {
+		if err := os.MkdirAll(filepath.Dir(adapter.RunnerAuthConfigPath), 0o700); err != nil {
+			return fmt.Errorf("create runner auth config dir: %w", err)
+		}
+		if err := os.WriteFile(adapter.RunnerAuthConfigPath, []byte(gen.AuthConfigContent), 0o600); err != nil {
+			return fmt.Errorf("write runner auth config: %w", err)
+		}
 	}
 
 	log.Info("generated nextflow config",

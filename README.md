@@ -496,14 +496,19 @@ bytes; the chart always sets it):
 - Getting or cancelling a task of another run through a run's path is
   `404`, as is any task ID that doesn't exist.
 - The engines send the token on every call: Nextflow through nf-ga4gh's
-  `tes.oauthToken` in the generated config, Snakemake and miniwdl through
-  Conquest's plugins (py-tes `token`).
+  `tes.oauthToken` in a second config file in the runner pod's own `/tmp`
+  (never in the workspace, which task pods and, in `objectfs` mode, S3
+  clients can read), Snakemake and miniwdl through Conquest's plugins
+  (py-tes `token`).
 
-So a runner, and workflow code running next to it (the token is readable
-in the runner pod and, in `pvc` and `objectfs` mode, in the run's
-`nextflow.config` on the workspace), can act on its own run only. The
-token is in the runner Job's spec: who can read Jobs in the namespace can
-act on active runs; runner pods don't mount a service account token.
+So on the callback API, a runner, and workflow code running next to it
+(which can read the token in the runner pod), can act on its own run only.
+That holds for the server as a whole only with authentication on
+(`CONQUEST_AUTH_ENABLED=true`): otherwise the open public TES API on the
+same port still reaches every run (`conquest_run_id` tag, cancel by task
+ID). The token is in the runner Job's spec: who can read Jobs in the
+namespace can act on active runs; runner pods don't mount a service
+account token.
 
 Without `CONQUEST_RUNNER_SECRET` the callback API stays open, as before, and
 the server logs a warning: keep it off any public route and restrict
@@ -513,6 +518,10 @@ publicly.
 
 Upgrading: runs started before the secret was set (or before it was
 rotated) have no valid token, so their callbacks fail and the runs fail.
+Runner images must come from a build that sends the token (this version
+or later), including every per-version override
+(`CONQUEST_NEXTFLOW_RUNNER_IMAGES` and the like, chart `*RunnerImages`):
+older runners get `401` on their first callback.
 Drain active runs before setting or rotating the secret; with more than one
 replica, roll out with the Deployment strategy `Recreate`, since all
 replicas must use the same secret.

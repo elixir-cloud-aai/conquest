@@ -251,8 +251,9 @@ func TestGenerateNextflowConfig_RunnerToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(gen.ConfigContent, "oauthToken") {
-		t.Fatalf("oauthToken without a runner token:\n%s", gen.ConfigContent)
+	if strings.Contains(gen.ConfigContent, "oauthToken") || gen.AuthConfigContent != "" ||
+		strings.Contains(strings.Join(gen.CLIArgs, " "), RunnerAuthConfigPath) {
+		t.Fatalf("auth config without a runner token: %q, %v", gen.AuthConfigContent, gen.CLIArgs)
 	}
 
 	withToken := base
@@ -261,8 +262,18 @@ func TestGenerateNextflowConfig_RunnerToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(gen.ConfigContent, "tes.oauthToken = '0123abcdef'\n") {
-		t.Fatalf("config lacks the runner token:\n%s", gen.ConfigContent)
+	if strings.Contains(gen.ConfigContent, "0123abcdef") {
+		t.Fatalf("runner token in the workspace config:\n%s", gen.ConfigContent)
+	}
+	if gen.AuthConfigContent != "tes.oauthToken = '0123abcdef'\n" {
+		t.Fatalf("auth config = %q", gen.AuthConfigContent)
+	}
+	args := strings.Join(gen.CLIArgs, " ")
+	if !strings.Contains(args, "-c /workspace/nextflow.config -c "+RunnerAuthConfigPath+" ") {
+		t.Fatalf("CLI args don't load the auth config: %s", args)
+	}
+	if strings.HasPrefix(RunnerAuthConfigPath, "/workspace") {
+		t.Fatal("auth config in the workspace")
 	}
 
 	// anything else could break out of the quoted config string

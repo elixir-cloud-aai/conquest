@@ -223,7 +223,8 @@ storageIsolation:
 # and the runner callback API (/internal/runs/<run ID>/...) accepts only that
 # token for that run, while the run is active (README: Runner callbacks).
 # Always on with the chart. Rotating the secret fails active runs: drain
-# them first.
+# them first. All runner images (including the *RunnerImages overrides)
+# must be builds that send the token.
 runner:
   # Existing Secret with key "runner-secret" (>= 32 bytes); generated if empty.
   # Set it when rendering without cluster access (helm template, Argo CD):
