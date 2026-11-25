@@ -526,6 +526,33 @@ Drain active runs before setting or rotating the secret; with more than one
 replica, roll out with the Deployment strategy `Recreate`, since all
 replicas must use the same secret.
 
+### Browser front ends (CORS)
+
+Off by default. `CONQUEST_CORS_ALLOWED_ORIGINS` lists the exact origins
+(`scheme://host[:port]`, comma-separated; chart: `cors.allowedOrigins`) of
+web portals whose pages call the public WES and TES APIs directly (package
+`internal/cors`). For those origins, responses carry
+`Access-Control-Allow-Origin` (the caller's origin, with `Vary: Origin`),
+and preflight requests (`OPTIONS` with `Access-Control-Request-Method`)
+get `204` with methods `GET, POST, OPTIONS` and headers
+`Authorization, Content-Type`, answered before authentication, since
+browsers send them without the token. A wildcard (`*`) is refused at
+startup, credentials (cookies) are never allowed, and the runner callback
+API and the storage gateway get no CORS headers. CORS only tells browsers
+which pages may read the answers: every request still needs its token.
+
+### Service info
+
+`GET /ga4gh/wes/v1/service-info` can carry the
+[GA4GH service-info](https://github.com/ga4gh-discovery/ga4gh-service-info)
+base fields, for registries that list services by them: set
+`CONQUEST_SERVICE_INFO_ID` (reverse domain name), `_NAME`,
+`_ORGANIZATION_NAME`, `_ORGANIZATION_URL` and `_VERSION` (required
+together), and optionally `_DESCRIPTION`, `_CONTACT_URL`,
+`_DOCUMENTATION_URL` and `_ENVIRONMENT` (chart: `serviceInfo.*`). The
+answer then also has `type` `org.ga4gh:wes:1.1.0`. Unset (default), the
+answer is as before, without these fields.
+
 ## Federation: Remote TES Endpoints
 
 Conquest can send individual tasks to other GA4GH TES servers (Funnel, TESK,
@@ -756,6 +783,8 @@ No config files.
 | `CONQUEST_STORAGE_ISOLATION`        | `false`              | No S3 credentials in task pods (see Storage Isolation) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
+| `CONQUEST_CORS_ALLOWED_ORIGINS`     | —                    | Exact origins of browser front ends (see CORS) |
+| `CONQUEST_SERVICE_INFO_*`           | —                    | GA4GH service-info base fields (see Service info) |
 | `CONQUEST_RECONCILER_INTERVAL`      | `5s`                 | How often reconcilers poll K8s    |
 | `CONQUEST_ASYNC_DISPATCH`           | `true`               | Submit TES tasks in the background |
 | `CONQUEST_DISPATCH_WORKERS`         | `8`                  | Task submissions in parallel      |
@@ -820,6 +849,9 @@ authenticated.
   every run's objects in the bucket. Until that is fixed, let only trusted
   callers create runs (`create.entitlements`), process only data that
   isn't sensitive, and tell users about this limit.
+- **Browser front ends and registries**: `cors.allowedOrigins` (exact
+  origins, see CORS) and `serviceInfo.*` (see Service info) are empty by
+  default.
 - **Routes**: the chart creates no Ingress or HTTPRoute. Route publicly
   only what callers outside the cluster need: `/ga4gh/wes/v1/` for
   workflow submitters and, with remote TES endpoints

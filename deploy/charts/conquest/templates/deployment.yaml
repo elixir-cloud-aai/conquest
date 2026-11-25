@@ -255,6 +255,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.runner.existingSecret | default (printf "%s-runner" (include "conquest.fullname" .)) }}
                   key: runner-secret
+            {{- with .Values.cors.allowedOrigins }}
+            - name: CONQUEST_CORS_ALLOWED_ORIGINS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with .Values.serviceInfo }}
+            {{- range $key, $value := dict "ID" .id "NAME" .name "DESCRIPTION" .description "ORGANIZATION_NAME" .organization.name "ORGANIZATION_URL" .organization.url "CONTACT_URL" .contactUrl "DOCUMENTATION_URL" .documentationUrl "ENVIRONMENT" .environment "VERSION" .version }}
+            {{- if $value }}
+            - name: CONQUEST_SERVICE_INFO_{{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if or .Values.storageGateway.enabled .Values.storageIsolation.enabled }}
             - name: CONQUEST_STORAGE_GATEWAY_SECRET
               valueFrom:
