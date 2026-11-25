@@ -28,16 +28,19 @@ func NewRunStore(pool *pgxpool.Pool) *RunStore {
 	return &RunStore{pool: pool}
 }
 
-// Create persists a new run. In a context scoped to an owner (package
-// ownership), the run is stamped with that owner, whatever run.Owner says,
-// and run.Owner and run.AuthContext are set to what was stored. An empty
-// owner ID is stored as NULL: such a run belongs to nobody.
+// Create persists a new run. The owner comes only from the context (package
+// ownership): a scoped context stamps its owner, an unscoped one creates a
+// run without owner, whatever run.Owner says; run.Owner and run.AuthContext
+// are set to what was stored. A scoped context with an empty owner ID is an
+// error: its caller could never read the run.
 func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
-	if owner, ok := ownership.FromContext(ctx); ok {
-		run.Owner, run.AuthContext = owner.ID, owner.Context
-	}
+	run.Owner, run.AuthContext = "", nil
 	var owner *string
-	if run.Owner != "" {
+	if o, ok := ownership.FromContext(ctx); ok {
+		if o.ID == "" {
+			return ErrEmptyOwner
+		}
+		run.Owner, run.AuthContext = o.ID, o.Context
 		owner = &run.Owner
 	}
 	wsKind, wsClaim, wsAccess, wsPV := flattenWorkspaceBinding(run.Workspace)

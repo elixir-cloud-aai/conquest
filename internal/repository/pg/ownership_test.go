@@ -2,8 +2,10 @@ package pg
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/anuragxxd/conquest/internal/domain"
 	"github.com/anuragxxd/conquest/internal/ownership"
 )
 
@@ -47,5 +49,14 @@ func TestOwnerFilters_EmptyOwnerStillFilters(t *testing.T) {
 	clause, args := runOwnerFilter(ctx)
 	if clause != " AND owner = $1" || len(args) != 1 || args[0] != "" {
 		t.Fatalf("filter = %q %v, want an owner predicate on \"\"", clause, args)
+	}
+}
+
+func TestRunStoreCreate_RefusesEmptyOwner(t *testing.T) {
+	// Refused before the database is touched (the store has no pool).
+	ctx := ownership.NewContext(context.Background(), ownership.Owner{})
+	err := (&RunStore{}).Create(ctx, &domain.Run{RunID: "r1"})
+	if !errors.Is(err, ErrEmptyOwner) {
+		t.Fatalf("err = %v, want ErrEmptyOwner", err)
 	}
 }

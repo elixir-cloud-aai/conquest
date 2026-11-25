@@ -59,6 +59,7 @@ func TestOwnership_CreateStampsOwner(t *testing.T) {
 	}
 
 	unowned := newTestRun()
+	unowned.Owner = "ignored" // without a scope, no owner at all
 	if err := runs.Create(ctx, unowned); err != nil {
 		t.Fatal(err)
 	}
