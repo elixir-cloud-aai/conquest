@@ -8,6 +8,10 @@ name: ghcr
 #   pull request    -> build and scan each image, publish nothing
 #   push to master  -> push by digest, scan, attest, sign, tag sha-<short>
 #
+# Only sha-<short> tags and linux/amd64 so far: no :latest, version tags or
+# arm64 as in images.yaml. The image list and its version pins mirror
+# images.yaml; change both together.
+#
 # Job graph (push)
 # ----------------
 #   push ──> scan ──> publish
@@ -18,7 +22,10 @@ name: ghcr
 # provenance of each scanned digest, signs it (cosign keyless, with the
 # workflow's OIDC identity) and only then tags it, so a tag always points to
 # a scanned, signed digest. `publish` runs only when every image was pushed
-# and scanned, so either all images get the tag or none does.
+# and scanned, so no image is tagged before all of them passed the scan. A
+# publish leg can still fail on its own (e.g. a Sigstore outage): re-run the
+# failed jobs ("Re-run failed jobs"; "Re-run all jobs" collides with the
+# scan reports of the first attempt), then every image has the tag.
 #
 # The nf-*-runner images layer the conquest binary onto a Nextflow runtime
 # base (docker/nf-runtime). Each runner job builds its base in the same job
@@ -44,9 +51,10 @@ permissions:
   contents: read
 
 # A new commit on a pull request cancels the pull request's runs in progress;
-# pushes to master each get their own group, so none is dropped
+# runs on master (pushes and manual runs) are grouped per commit, so two runs
+# never race on the same sha tag and none is dropped
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -175,6 +183,9 @@ jobs:
           image: ci/${{ matrix.name }}:pr
           category: ghcr-${{ matrix.name }}
           upload: "false"
+          # Informational until SCAN_FAIL is "true": the full report goes to
+          # the artifact trivy-report-ghcr-<image>
+          report: "true"
           fail: ${{ env.SCAN_FAIL }}
 
   # ---------------------------------------------------------------------------
