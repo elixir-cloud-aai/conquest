@@ -844,8 +844,9 @@ storageIsolation:
 Upgrading: drain active runs before switching authentication on (see
 Authentication) and before the first upgrade to a chart with runner
 tokens (see Runner callbacks: runs started before fail), and set
-`conquest.strategy: {type: Recreate}` for that upgrade: with the default rolling update, old pods keep serving without
-authentication (or without the new create rule) until they are replaced.
+`conquest.strategy: {type: Recreate}` for that upgrade: with the default
+rolling update, old pods keep serving without authentication (or without
+the new create rule) until they are replaced.
 
 CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository

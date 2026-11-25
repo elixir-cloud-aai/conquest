@@ -195,6 +195,8 @@ func normalizeWorkflowParams(raw json.RawMessage) (map[string]any, error) {
 }
 
 // WriteConfigFiles writes the generated config and params to the workspace dir.
+//
+// It doesn't write AuthConfigContent: see WriteAuthConfig.
 func WriteConfigFiles(dir string, gen *GeneratedConfig) error {
 	configPath := filepath.Join(dir, "nextflow.config")
 	if err := os.WriteFile(configPath, []byte(gen.ConfigContent), 0644); err != nil {
@@ -208,5 +210,20 @@ func WriteConfigFiles(dir string, gen *GeneratedConfig) error {
 		}
 	}
 
+	return nil
+}
+
+// WriteAuthConfig writes AuthConfigContent, if any, to path (normally
+// RunnerAuthConfigPath), readable by the runner only.
+func WriteAuthConfig(path string, gen *GeneratedConfig) error {
+	if gen.AuthConfigContent == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create runner auth config dir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(gen.AuthConfigContent), 0o600); err != nil {
+		return fmt.Errorf("write runner auth config: %w", err)
+	}
 	return nil
 }

@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -280,5 +282,25 @@ func TestGenerateNextflowConfig_RunnerToken(t *testing.T) {
 	withToken.RunnerToken = "abc'\nprocess.executor = 'local"
 	if _, err := GenerateNextflowConfig(withToken); err == nil {
 		t.Fatal("non-hex runner token accepted")
+	}
+}
+
+func TestWriteAuthConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conquest", "runner-auth.config")
+	if err := WriteAuthConfig(path, &GeneratedConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("file written without a token: %v", err)
+	}
+	if err := WriteAuthConfig(path, &GeneratedConfig{AuthConfigContent: "tes.oauthToken = 'ab'\n"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v, want 0600", info.Mode().Perm())
 	}
 }
