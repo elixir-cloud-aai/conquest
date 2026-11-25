@@ -103,14 +103,14 @@ func (h *Handler) SetRunnerAuth(authn func(http.Handler) http.Handler) { h.runne
 // RunLookup tells runnerauth whether a run is terminal, from runs.
 func RunLookup(runs repository.RunStore) runnerauth.RunLookup {
 	return func(ctx context.Context, runID string) (bool, error) {
-		run, err := runs.Get(ctx, runID)
+		state, err := runs.GetStatus(ctx, runID)
 		if errors.Is(err, pg.ErrNotFound) {
 			return false, runnerauth.ErrRunNotFound
 		}
 		if err != nil {
 			return false, err
 		}
-		return run.State.IsTerminal(), nil
+		return state.IsTerminal(), nil
 	}
 }
 

@@ -253,7 +253,7 @@ spec:
             - name: CONQUEST_RUNNER_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.runner.existingSecret | default (printf "%s-runner" (include "conquest.fullname" .)) }}
+                  name: {{ .Values.runner.existingSecret | default (printf "%s-runner" (include "conquest.fullname" . | trunc 56 | trimSuffix "-")) }}
                   key: runner-secret
             {{- with .Values.cors.allowedOrigins }}
             - name: CONQUEST_CORS_ALLOWED_ORIGINS
