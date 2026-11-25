@@ -343,7 +343,8 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
 		NoErrorReturnFirstHTTPReq: &failFirst,
 		// An unknown kid refetches the key set at most once a minute. The
 		// wait bound is also the refetch's deadline, so it is the request
-		// timeout; while the limiter is used up, lookups fail at once.
+		// timeout, capped below the interval (Validate): while the limiter
+		// is used up, lookups fail at once instead of queueing.
 		RefreshUnknownKID: rate.NewLimiter(rate.Every(time.Minute), 1),
 		RateLimitWaitMax:  i.client.Timeout,
 		RefreshErrorHandlerFunc: func(u string) func(context.Context, error) {

@@ -321,7 +321,10 @@ token. Tokens must name their key (`kid`); keys marked for encryption
 (`use: enc`) are not used. If an issuer's discovery document or key set
 can't be fetched, requests answer 503 (also while the first fetch is in
 progress) and the fetch is retried 10 seconds after the failed attempt.
-An unknown key ID refetches the key set at most once a minute.
+An unknown key ID refetches the key set at most once a minute; within that
+minute, further unknown key IDs are refused at once (401), so a burst of
+tokens with made-up key IDs can delay the pickup of a rotated key by up to a
+minute.
 
 The issuers live in a YAML file (`CONQUEST_AUTH_CONFIG`, default
 `/etc/conquest/auth/config.yaml`); unknown keys are refused, and the server
@@ -336,7 +339,7 @@ issuers:
       - client_id: <client ID>
 algorithms: [RS256, ES256]  # default
 clock_skew_seconds: 60      # default
-timeout_seconds: 10         # default; discovery and key set requests
+timeout_seconds: 10         # default, 1-30; discovery and key set requests
 ```
 
 Issuer and key set URLs must use https (plain http only to a loopback

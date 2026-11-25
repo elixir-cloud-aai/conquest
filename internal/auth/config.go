@@ -21,7 +21,7 @@ type Config struct {
 	// ClockSkewSeconds is the leeway for exp, nbf and iat (default 60).
 	ClockSkewSeconds *int `json:"clock_skew_seconds,omitempty"`
 	// TimeoutSeconds bounds each request to an issuer: discovery and key
-	// set fetches (default 10).
+	// set fetches (default 10, at most 30).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
@@ -128,8 +128,10 @@ func (c *Config) Validate() error {
 		timeout := 10
 		c.TimeoutSeconds = &timeout
 	}
-	if *c.TimeoutSeconds <= 0 {
-		return fmt.Errorf("timeout_seconds must be positive")
+	// The cap keeps the unknown-kid wait below the refetch interval (one
+	// minute), so lookups fail at once while the refetch slot is used up.
+	if *c.TimeoutSeconds <= 0 || *c.TimeoutSeconds > 30 {
+		return fmt.Errorf("timeout_seconds must be between 1 and 30")
 	}
 	return nil
 }
