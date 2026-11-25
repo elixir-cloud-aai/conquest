@@ -153,6 +153,8 @@ func TestMiddleware_Create(t *testing.T) {
 			0, `{"sub":"alice","eduperson_entitlement":["` + entitled + `"]} {}`, nil, http.StatusServiceUnavailable, 1},
 		{"userinfo object followed by whitespace", http.MethodPost, user("alice"),
 			0, `{"sub":"alice","eduperson_entitlement":["` + entitled + `"]}` + "\n ", nil, http.StatusTeapot, 1},
+		{"userinfo object, whitespace past the size limit, then data", http.MethodPost, user("alice"),
+			0, `{"sub":"alice","eduperson_entitlement":["` + entitled + `"]}` + strings.Repeat(" ", maxUserinfoBytes) + "{}", nil, http.StatusServiceUnavailable, 1},
 		{"userinfo JSON but not an object", http.MethodPost, user("alice"),
 			0, `["sub"]`, nil, http.StatusServiceUnavailable, 1},
 		{"userinfo redirect", http.MethodPost, user("alice"),

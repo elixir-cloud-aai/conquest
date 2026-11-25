@@ -423,11 +423,11 @@ TES API (`POST /ga4gh/tes/v1/tasks`) needs, besides a valid token, one of:
   (a list of strings or one string). Values are compared as exact strings,
   never as prefixes; the userinfo `sub` must equal the token's `sub`.
 
-Any other caller with a valid token is refused with 403, including a
+Any other caller with a valid token is refused with 403. That includes a
 client that isn't listed (`sub == client_id`; the issuer isn't asked for
-it) whose token passes validation because its `aud` contains a configured
-audience. Such a client's token with only its own ID in `aud` fails token
-validation already (401). Without
+it) whose token passes validation because its `aud` contains one of the
+issuer's `audiences`; otherwise its token fails validation already (401).
+Without
 `create.entitlements`, only listed service clients create. The server
 doesn't start if neither entitlements nor service clients are configured,
 since nobody could create runs.
@@ -445,7 +445,8 @@ create. Answers:
   endpoint refuses the token (401 or 403), or its `sub` is missing or
   differs from the token's;
 - 503: the userinfo endpoint can't be reached, times out
-  (`timeout_seconds`), answers anything else than 200 with a JSON object,
+  (`timeout_seconds`), answers anything else than 200 with a single JSON
+  object of at most 1 MiB,
   or isn't configured and can't be discovered (retried 10 seconds after a
   failed discovery). The userinfo request follows no redirects (a 3xx
   answers 503), so the user's token goes only to the userinfo endpoint.
