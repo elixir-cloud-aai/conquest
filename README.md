@@ -542,7 +542,10 @@ get `204` with methods `GET, POST, OPTIONS` and headers
 browsers send them without the token. A wildcard (`*`) is refused at
 startup, credentials (cookies) are never allowed, and the runner callback
 API and the storage gateway get no CORS headers. CORS only tells browsers
-which pages may read the answers: every request still needs its token.
+which pages may read the answers; it grants no access. With authentication
+on, every request still needs its token, except `service-info` while it is
+public (`CONQUEST_AUTH_SERVICE_INFO_PUBLIC`, default); with authentication
+off, the APIs are open to every caller, browser or not.
 
 ### Service info
 

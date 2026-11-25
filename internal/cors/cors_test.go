@@ -19,7 +19,7 @@ func TestParseOrigins(t *testing.T) {
 	if got, err := ParseOrigins(""); err != nil || len(got) != 0 {
 		t.Fatalf("empty: %v, %v", got, err)
 	}
-	for _, bad := range []string{"*", "https://portal.example.org/", "https://x/path", "portal.example.org", "ftp://x", "https://u@x", "https://x?q=1", "https://x:443", "http://x:80"} {
+	for _, bad := range []string{"*", "https://portal.example.org/", "https://x/path", "portal.example.org", "ftp://x", "https://u@x", "https://x?q=1", "https://x:443", "http://x:80", "https://x?", "https://x#", "https://x/?", " https://x? "} {
 		if _, err := ParseOrigins(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

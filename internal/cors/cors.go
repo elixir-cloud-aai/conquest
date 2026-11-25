@@ -35,8 +35,10 @@ func ParseOrigins(raw string) ([]string, error) {
 			return nil, fmt.Errorf("origin %q: list exact origins; a wildcard is not allowed with bearer tokens", o)
 		}
 		u, err := url.Parse(o)
+		// Strict: the origin must be exactly scheme://host[:port], so that
+		// it can equal the Origin header a browser sends (no "?", "#", "/").
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" ||
-			u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			!strings.EqualFold(o, u.Scheme+"://"+u.Host) {
 			return nil, fmt.Errorf("origin %q must be scheme://host[:port] without path", o)
 		}
 		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
