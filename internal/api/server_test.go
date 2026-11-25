@@ -80,7 +80,7 @@ func TestNewRouter_WithoutAuth(t *testing.T) {
 func TestCORSPreflightBeforeRoutingAndAuth(t *testing.T) {
 	ctrl := controller.NewRunController(nil, nil, nil, storage.Layout{}, nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
-	router := cors.Middleware([]string{"https://portal.example.org"}, []string{"/ga4gh/wes/", "/ga4gh/tes/"})(
+	router := cors.Middleware([]string{"https://portal.example.org"}, PublicPathPrefixes)(
 		NewRouterWithAuth(wes.NewHandler(ctrl), tes.NewHandler(nil, nil, nil, nil), denyAll))
 
 	req := httptest.NewRequest(http.MethodOptions, "/ga4gh/wes/v1/runs", nil)

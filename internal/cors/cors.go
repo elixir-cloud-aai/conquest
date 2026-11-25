@@ -39,6 +39,9 @@ func ParseOrigins(raw string) ([]string, error) {
 			u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 			return nil, fmt.Errorf("origin %q must be scheme://host[:port] without path", o)
 		}
+		if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+			return nil, fmt.Errorf("origin %q: leave out the default port; browsers send origins without it", o)
+		}
 		origins = append(origins, strings.ToLower(o))
 	}
 	return origins, nil

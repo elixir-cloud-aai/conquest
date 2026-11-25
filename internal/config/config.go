@@ -198,29 +198,18 @@ func Load() (*Config, error) {
 	}
 
 	c := &Config{
-		HTTPAddr:              envOr("CONQUEST_HTTP_ADDR", ":8080"),
-		PostgresDSN:           envOr("CONQUEST_POSTGRES_DSN", "postgres://conquest:conquest@localhost:5432/conquest?sslmode=disable"),
-		S3Bucket:              envOr("CONQUEST_S3_BUCKET", "conquest-workflows"),
-		S3Endpoint:            envOr("CONQUEST_S3_ENDPOINT", ""),
-		S3Region:              envOr("CONQUEST_S3_REGION", "us-east-1"),
-		FederationConfigFile:  strings.TrimSpace(os.Getenv("CONQUEST_FEDERATION_CONFIG")),
-		AuthEnabled:           authEnabled,
-		AuthServiceInfoPublic: authServiceInfoPublic,
-		AuthConfigFile:        envOr("CONQUEST_AUTH_CONFIG", "/etc/conquest/auth/config.yaml"),
-		StorageGatewayURL:     strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_GATEWAY_URL")),
-		StorageGatewaySecret:  os.Getenv("CONQUEST_STORAGE_GATEWAY_SECRET"),
-		RunnerSecret:          os.Getenv("CONQUEST_RUNNER_SECRET"),
-		ServiceInfo: ServiceInfo{
-			ID:               strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ID")),
-			Name:             strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_NAME")),
-			Description:      strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_DESCRIPTION")),
-			OrganizationName: strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ORGANIZATION_NAME")),
-			OrganizationURL:  strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ORGANIZATION_URL")),
-			ContactURL:       strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_CONTACT_URL")),
-			DocumentationURL: strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_DOCUMENTATION_URL")),
-			Environment:      strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ENVIRONMENT")),
-			Version:          strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_VERSION")),
-		},
+		HTTPAddr:                      envOr("CONQUEST_HTTP_ADDR", ":8080"),
+		PostgresDSN:                   envOr("CONQUEST_POSTGRES_DSN", "postgres://conquest:conquest@localhost:5432/conquest?sslmode=disable"),
+		S3Bucket:                      envOr("CONQUEST_S3_BUCKET", "conquest-workflows"),
+		S3Endpoint:                    envOr("CONQUEST_S3_ENDPOINT", ""),
+		S3Region:                      envOr("CONQUEST_S3_REGION", "us-east-1"),
+		FederationConfigFile:          strings.TrimSpace(os.Getenv("CONQUEST_FEDERATION_CONFIG")),
+		AuthEnabled:                   authEnabled,
+		AuthServiceInfoPublic:         authServiceInfoPublic,
+		AuthConfigFile:                envOr("CONQUEST_AUTH_CONFIG", "/etc/conquest/auth/config.yaml"),
+		StorageGatewayURL:             strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_GATEWAY_URL")),
+		StorageGatewaySecret:          os.Getenv("CONQUEST_STORAGE_GATEWAY_SECRET"),
+		RunnerSecret:                  os.Getenv("CONQUEST_RUNNER_SECRET"),
 		S3PublicEndpoint:              strings.TrimSpace(os.Getenv("CONQUEST_S3_PUBLIC_ENDPOINT")),
 		StorageIsolation:              envBoolOr("CONQUEST_STORAGE_ISOLATION", false),
 		K8sNamespace:                  envOr("CONQUEST_K8S_NAMESPACE", "conquest"),
@@ -329,6 +318,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("CONQUEST_AUTH_ENABLED needs CONQUEST_RUNNER_SECRET: without it, the runner callback API reaches every run unauthenticated")
 	}
 
+	c.ServiceInfo = ServiceInfo{
+		ID:               strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ID")),
+		Name:             strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_NAME")),
+		Description:      strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_DESCRIPTION")),
+		OrganizationName: strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ORGANIZATION_NAME")),
+		OrganizationURL:  strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ORGANIZATION_URL")),
+		ContactURL:       strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_CONTACT_URL")),
+		DocumentationURL: strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_DOCUMENTATION_URL")),
+		Environment:      strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_ENVIRONMENT")),
+		Version:          strings.TrimSpace(os.Getenv("CONQUEST_SERVICE_INFO_VERSION")),
+	}
 	origins, err := cors.ParseOrigins(os.Getenv("CONQUEST_CORS_ALLOWED_ORIGINS"))
 	if err != nil {
 		return nil, fmt.Errorf("CONQUEST_CORS_ALLOWED_ORIGINS: %w", err)

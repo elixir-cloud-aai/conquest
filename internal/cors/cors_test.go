@@ -19,7 +19,7 @@ func TestParseOrigins(t *testing.T) {
 	if got, err := ParseOrigins(""); err != nil || len(got) != 0 {
 		t.Fatalf("empty: %v, %v", got, err)
 	}
-	for _, bad := range []string{"*", "https://portal.example.org/", "https://x/path", "portal.example.org", "ftp://x", "https://u@x", "https://x?q=1"} {
+	for _, bad := range []string{"*", "https://portal.example.org/", "https://x/path", "portal.example.org", "ftp://x", "https://u@x", "https://x?q=1", "https://x:443", "http://x:80"} {
 		if _, err := ParseOrigins(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
@@ -61,6 +61,14 @@ func TestPreflightIsAnsweredBeforeAuth(t *testing.T) {
 	}
 }
 
+func TestOriginMatchIgnoresCase(t *testing.T) {
+	w, _ := serve([]string{"https://portal.example.org"}, http.MethodGet, "/ga4gh/tes/v1/tasks",
+		map[string]string{"Origin": "https://Portal.Example.org"})
+	if w.Header().Get("Access-Control-Allow-Origin") != "https://Portal.Example.org" {
+		t.Fatalf("headers %v", w.Header())
+	}
+}
+
 func TestActualRequestGetsAllowOrigin(t *testing.T) {
 	w, reached := serve([]string{"https://portal.example.org"}, http.MethodGet, "/ga4gh/wes/v1/service-info",
 		map[string]string{"Origin": "https://portal.example.org"})
@@ -97,5 +105,14 @@ func TestOtherRequestsPassUnchanged(t *testing.T) {
 		if !reached || w.Header().Get("Access-Control-Allow-Origin") != "" {
 			t.Errorf("%s: reached %v, headers %v", c.name, reached, w.Header())
 		}
+	}
+}
+
+// An OPTIONS request that isn't a preflight goes on to routing and auth.
+func TestPlainOptionsIsNotAPreflight(t *testing.T) {
+	w, reached := serve([]string{"https://portal.example.org"}, http.MethodOptions, "/ga4gh/wes/v1/runs",
+		map[string]string{"Origin": "https://portal.example.org"})
+	if !reached || w.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, reached %v; want it passed on", w.Code, reached)
 	}
 }

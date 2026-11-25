@@ -23,36 +23,18 @@ import (
 type Handler struct {
 	ctrl *controller.RunController
 	// base holds the GA4GH service-info base fields; zero: none.
-	base ServiceInfo
+	base ServiceInfoBase
 }
 
-// ServiceInfoBase holds the GA4GH service-info base fields of this
-// deployment.
-type ServiceInfoBase struct {
-	ID, Name, Description             string
-	OrganizationName, OrganizationURL string
-	ContactURL, DocumentationURL      string
-	Environment, Version              string
-}
-
-// SetServiceInfo makes service-info answer with the GA4GH base fields,
-// type org.ga4gh:wes:1.1.0; an empty ID leaves them out.
+// SetServiceInfo makes service-info answer with the GA4GH base fields b,
+// with type org.ga4gh:wes:1.1.0; an empty b.ID leaves them out.
 func (h *Handler) SetServiceInfo(b ServiceInfoBase) {
 	if b.ID == "" {
-		h.base = ServiceInfo{}
+		h.base = ServiceInfoBase{}
 		return
 	}
-	h.base = ServiceInfo{
-		ID:               b.ID,
-		Name:             b.Name,
-		Type:             &ServiceType{Group: "org.ga4gh", Artifact: "wes", Version: "1.1.0"},
-		Description:      b.Description,
-		Organization:     &Organization{Name: b.OrganizationName, URL: b.OrganizationURL},
-		ContactURL:       b.ContactURL,
-		DocumentationURL: b.DocumentationURL,
-		Environment:      b.Environment,
-		Version:          b.Version,
-	}
+	b.Type = &ServiceType{Group: "org.ga4gh", Artifact: "wes", Version: "1.1.0"}
+	h.base = b
 }
 
 // NewHandler creates WES handlers.
@@ -103,7 +85,7 @@ func (h *Handler) GetServiceInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	info := h.base
+	info := ServiceInfo{ServiceInfoBase: h.base}
 	info.WorkflowTypeVersions = workflowTypes
 	info.SupportedWESVersions = []string{"1.1.0"}
 	info.SupportedFilesystemProtocols = []string{"s3", "https"}

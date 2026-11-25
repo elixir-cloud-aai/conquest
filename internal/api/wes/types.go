@@ -16,6 +16,20 @@ import (
 // service-info base fields (when configured, see SetServiceInfo) and the
 // WES fields.
 type ServiceInfo struct {
+	ServiceInfoBase
+
+	WorkflowTypeVersions         map[string]TypeVersions `json:"workflow_type_versions"`
+	SupportedWESVersions         []string                `json:"supported_wes_versions"`
+	SupportedFilesystemProtocols []string                `json:"supported_filesystem_protocols"`
+	WorkflowEngineVersions       map[string]string       `json:"workflow_engine_versions"`
+	SystemStateCounts            map[string]int          `json:"system_state_counts"`
+	AuthInstructionsURL          string                  `json:"auth_instructions_url"`
+	Tags                         map[string]string       `json:"tags,omitempty"`
+}
+
+// ServiceInfoBase holds the GA4GH service-info base fields; all empty:
+// none in the answer.
+type ServiceInfoBase struct {
 	ID               string        `json:"id,omitempty"`
 	Name             string        `json:"name,omitempty"`
 	Type             *ServiceType  `json:"type,omitempty"`
@@ -25,14 +39,6 @@ type ServiceInfo struct {
 	DocumentationURL string        `json:"documentationUrl,omitempty"`
 	Environment      string        `json:"environment,omitempty"`
 	Version          string        `json:"version,omitempty"`
-
-	WorkflowTypeVersions         map[string]TypeVersions `json:"workflow_type_versions"`
-	SupportedWESVersions         []string                `json:"supported_wes_versions"`
-	SupportedFilesystemProtocols []string                `json:"supported_filesystem_protocols"`
-	WorkflowEngineVersions       map[string]string       `json:"workflow_engine_versions"`
-	SystemStateCounts            map[string]int          `json:"system_state_counts"`
-	AuthInstructionsURL          string                  `json:"auth_instructions_url"`
-	Tags                         map[string]string       `json:"tags,omitempty"`
 }
 
 // ServiceType is the GA4GH service-info type.

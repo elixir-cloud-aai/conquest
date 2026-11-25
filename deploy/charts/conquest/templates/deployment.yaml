@@ -259,12 +259,22 @@ spec:
             - name: CONQUEST_CORS_ALLOWED_ORIGINS
               value: {{ join "," . | quote }}
             {{- end }}
-            {{- with .Values.serviceInfo }}
-            {{- range $key, $value := dict "ID" .id "NAME" .name "DESCRIPTION" .description "ORGANIZATION_NAME" .organization.name "ORGANIZATION_URL" .organization.url "CONTACT_URL" .contactUrl "DOCUMENTATION_URL" .documentationUrl "ENVIRONMENT" .environment "VERSION" .version }}
-            {{- if $value }}
-            - name: CONQUEST_SERVICE_INFO_{{ $key }}
-              value: {{ $value | quote }}
+            {{- $si := .Values.serviceInfo | default dict }}
+            {{- $org := $si.organization | default dict }}
+            {{- $siEnv := list
+                  (list "ID" $si.id) (list "NAME" $si.name) (list "DESCRIPTION" $si.description)
+                  (list "ORGANIZATION_NAME" $org.name) (list "ORGANIZATION_URL" $org.url)
+                  (list "CONTACT_URL" $si.contactUrl) (list "DOCUMENTATION_URL" $si.documentationUrl)
+                  (list "ENVIRONMENT" $si.environment) (list "VERSION" $si.version) }}
+            {{- $siSet := false }}
+            {{- range $siEnv }}{{ if index . 1 }}{{ $siSet = true }}{{ end }}{{ end }}
+            {{- if and $siSet (not (and $si.id $si.name $org.name $org.url $si.version)) }}
+            {{- fail "serviceInfo: id, name, organization.name, organization.url and version are required when any serviceInfo value is set" }}
             {{- end }}
+            {{- range $siEnv }}
+            {{- if index . 1 }}
+            - name: CONQUEST_SERVICE_INFO_{{ index . 0 }}
+              value: {{ index . 1 | quote }}
             {{- end }}
             {{- end }}
             {{- if or .Values.storageGateway.enabled .Values.storageIsolation.enabled }}

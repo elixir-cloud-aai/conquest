@@ -339,8 +339,7 @@ func run(log *slog.Logger) error {
 		ID:               cfg.ServiceInfo.ID,
 		Name:             cfg.ServiceInfo.Name,
 		Description:      cfg.ServiceInfo.Description,
-		OrganizationName: cfg.ServiceInfo.OrganizationName,
-		OrganizationURL:  cfg.ServiceInfo.OrganizationURL,
+		Organization:     &wes.Organization{Name: cfg.ServiceInfo.OrganizationName, URL: cfg.ServiceInfo.OrganizationURL},
 		ContactURL:       cfg.ServiceInfo.ContactURL,
 		DocumentationURL: cfg.ServiceInfo.DocumentationURL,
 		Environment:      cfg.ServiceInfo.Environment,
@@ -381,7 +380,7 @@ func run(log *slog.Logger) error {
 	}
 	// CORS wraps the router, so that preflight requests are answered before
 	// routing and authentication.
-	router := cors.Middleware(cfg.CORSAllowedOrigins, []string{"/ga4gh/wes/", "/ga4gh/tes/"})(
+	router := cors.Middleware(cfg.CORSAllowedOrigins, api.PublicPathPrefixes)(
 		api.NewRouterWithAuth(wesHandler, tesHandler, authn, extraRoutes...))
 	if len(cfg.CORSAllowedOrigins) > 0 {
 		log.Info("CORS enabled on the public WES and TES APIs", "origins", cfg.CORSAllowedOrigins)

@@ -12,6 +12,10 @@ import (
 	"github.com/anuragxxd/conquest/internal/api/wes"
 )
 
+// PublicPathPrefixes are the path prefixes of the public GA4GH APIs (WES
+// and TES), e.g. for CORS.
+var PublicPathPrefixes = []string{"/ga4gh/wes/", "/ga4gh/tes/"}
+
 // NewRouter creates a chi router with all WES and TES routes registered,
 // plus health, readiness, and startup probes matching the platform convention.
 // extra mounts further routes (e.g. the storage gateway).

@@ -240,7 +240,8 @@ cors:
 
 # GA4GH service-info base fields of WES service-info (registries list the
 # service by them). All empty (default): left out. If any is set, id, name,
-# organization.name, organization.url and version are required.
+# organization.name, organization.url and version are required (rendering
+# fails otherwise).
 serviceInfo:
   id: ""                # reverse domain name, e.g. org.example.conquest
   name: ""

@@ -529,7 +529,8 @@ replicas must use the same secret.
 ### Browser front ends (CORS)
 
 Off by default. `CONQUEST_CORS_ALLOWED_ORIGINS` lists the exact origins
-(`scheme://host[:port]`, comma-separated; chart: `cors.allowedOrigins`) of
+(`scheme://host[:port]`, without the default port, comma-separated;
+chart: `cors.allowedOrigins`) of
 web portals whose pages call the public WES and TES APIs directly (package
 `internal/cors`). For those origins, responses carry
 `Access-Control-Allow-Origin` (the caller's origin, with `Vary: Origin`),
@@ -551,7 +552,8 @@ base fields, for registries that list services by them: set
 together), and optionally `_DESCRIPTION`, `_CONTACT_URL`,
 `_DOCUMENTATION_URL` and `_ENVIRONMENT` (chart: `serviceInfo.*`). The
 answer then also has `type` `org.ga4gh:wes:1.1.0`. Unset (default), the
-answer is as before, without these fields.
+answer is as before, without these fields. The server refuses to start
+with some but not all required fields set; the chart refuses to render.
 
 ## Federation: Remote TES Endpoints
 
