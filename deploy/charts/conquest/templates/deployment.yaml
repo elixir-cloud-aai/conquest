@@ -268,6 +268,7 @@ spec:
                   (list "ENVIRONMENT" $si.environment) (list "VERSION" $si.version) }}
             {{- $siSet := false }}
             {{- range $siEnv }}{{ if index . 1 }}{{ $siSet = true }}{{ end }}{{ end }}
+            {{- /* same required fields as internal/config */}}
             {{- if and $siSet (not (and $si.id $si.name $org.name $org.url $si.version)) }}
             {{- fail "serviceInfo: id, name, organization.name, organization.url and version are required when any serviceInfo value is set" }}
             {{- end }}

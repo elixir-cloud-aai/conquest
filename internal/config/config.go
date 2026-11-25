@@ -336,7 +336,8 @@ func Load() (*Config, error) {
 	c.CORSAllowedOrigins = origins
 
 	if si := c.ServiceInfo; !si.IsZero() {
-		// GA4GH service-info requires these.
+		// GA4GH service-info requires these (the chart's deployment.yaml
+		// checks the same list).
 		required := []struct{ name, value string }{
 			{"CONQUEST_SERVICE_INFO_ID", si.ID},
 			{"CONQUEST_SERVICE_INFO_NAME", si.Name},
