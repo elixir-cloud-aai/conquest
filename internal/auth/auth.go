@@ -93,6 +93,7 @@ type issuer struct {
 	clients map[string]bool
 	client  *http.Client
 	ctx     context.Context
+	log     *slog.Logger
 
 	mu        sync.Mutex
 	keys      keyfunc.Keyfunc
@@ -127,7 +128,7 @@ func New(ctx context.Context, cfg *Config, log *slog.Logger) (*Authenticator, er
 		for _, sc := range ic.ServiceClients {
 			clients[sc.ClientID] = true
 		}
-		a.issuers[ic.URL] = &issuer{cfg: ic, clients: clients, client: client, ctx: ctx}
+		a.issuers[ic.URL] = &issuer{cfg: ic, clients: clients, client: client, ctx: ctx, log: log}
 	}
 	return a, nil
 }
@@ -279,7 +280,7 @@ func containsAny(have jwt.ClaimStrings, want []string) bool {
 // request resolves at a time, without holding the lock; requests that
 // arrive meanwhile, or within discoveryRetry after a failure, fail fast
 // with errUnavailable instead of queueing behind a slow issuer.
-func (i *issuer) keyfunc() (keyfunc.Keyfunc, error) {
+func (i *issuer) keyfunc() (keys keyfunc.Keyfunc, err error) {
 	i.mu.Lock()
 	switch {
 	case i.keys != nil:
@@ -295,55 +296,83 @@ func (i *issuer) keyfunc() (keyfunc.Keyfunc, error) {
 	i.resolving = true
 	i.mu.Unlock()
 
-	keys, err := i.resolve()
-
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	i.resolving = false
-	i.lastTry = time.Now() // the retry delay starts when the attempt ends
-	if err != nil {
-		i.lastError = fmt.Errorf("%w: issuer %s: %v", errUnavailable, i.cfg.URL, err)
-		return nil, i.lastError
-	}
-	i.keys = keys
-	return keys, nil
+	// The state is updated however resolve ends, a panic included, so
+	// that a failed attempt never leaves the issuer "being fetched".
+	err = errResolvePanicked
+	defer func() {
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		i.resolving = false
+		i.lastTry = time.Now() // the retry delay starts when the attempt ends
+		if err != nil {
+			i.lastError = fmt.Errorf("%w: issuer %s: %v", errUnavailable, i.cfg.URL, err)
+			keys, err = nil, i.lastError
+			return
+		}
+		i.keys = keys
+	}()
+	keys, err = i.resolve()
+	return keys, err
 }
+
+var errResolvePanicked = errors.New("key set resolution panicked")
 
 // resolve discovers the issuer's key set (unless configured) and fetches it.
 func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
+	// The key set's background refresh runs on ctx: an attempt that fails
+	// stops it, so failed attempts leave no goroutines behind.
+	ctx, cancel := context.WithCancel(i.ctx)
+	ok := false
+	defer func() {
+		if !ok {
+			cancel()
+		}
+	}()
+
 	jwksURI := i.cfg.JWKSURI
 	if jwksURI == "" {
 		var err error
-		if jwksURI, err = i.discover(); err != nil {
+		if jwksURI, err = i.discover(ctx); err != nil {
 			return nil, err
 		}
 	}
 	failFirst := false // a key set that can't be fetched is an error, retried later
-	keys, err := keyfunc.NewDefaultOverrideCtx(i.ctx, []string{jwksURI}, keyfunc.Override{
+	keys, err := keyfunc.NewDefaultOverrideCtx(ctx, []string{jwksURI}, keyfunc.Override{
 		Client:                    i.client,
 		HTTPTimeout:               i.client.Timeout,
 		NoErrorReturnFirstHTTPReq: &failFirst,
-		// An unknown kid refetches the key set at most once a minute and
-		// never makes a request wait for that.
+		// An unknown kid refetches the key set at most once a minute. The
+		// wait bound is also the refetch's deadline, so it is the request
+		// timeout; while the limiter is used up, lookups fail at once.
 		RefreshUnknownKID: rate.NewLimiter(rate.Every(time.Minute), 1),
-		RateLimitWaitMax:  time.Millisecond,
+		RateLimitWaitMax:  i.client.Timeout,
+		RefreshErrorHandlerFunc: func(u string) func(context.Context, error) {
+			return func(ctx context.Context, err error) {
+				i.log.WarnContext(ctx, "key set refresh failed", "issuer", i.cfg.URL, "url", u, "err", err)
+			}
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("key set: %w", err)
 	}
 	// Only signing keys (or keys that don't say) verify tokens.
-	return keyfunc.New(keyfunc.Options{
-		Ctx:          i.ctx,
+	kf, err := keyfunc.New(keyfunc.Options{
+		Ctx:          ctx,
 		Storage:      keys.Storage(),
 		UseWhitelist: []jwkset.USE{jwkset.UseSig, ""},
 	})
+	if err != nil {
+		return nil, err
+	}
+	ok = true
+	return kf, nil
 }
 
 // discover reads jwks_uri from the issuer's OpenID Connect discovery
 // document, which must name the configured issuer exactly.
-func (i *issuer) discover() (string, error) {
+func (i *issuer) discover(ctx context.Context) (string, error) {
 	u := strings.TrimSuffix(i.cfg.URL, "/") + "/.well-known/openid-configuration"
-	req, err := http.NewRequestWithContext(i.ctx, http.MethodGet, u, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}

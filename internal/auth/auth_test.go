@@ -14,7 +14,9 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +33,9 @@ const (
 // testIdP is an OpenID Connect issuer serving discovery and a key set.
 type testIdP struct {
 	srv       *httptest.Server
+	mu        sync.Mutex    // guards rsaKey, rsaKid and delay
+	rsaKid    string        // kid of rsaKey; "" = "rsa"
+	delay     time.Duration // latency of the key set endpoint
 	rsaKey    *rsa.PrivateKey
 	ecKey     *ecdsa.PrivateKey
 	discovery string // issuer named by the discovery document; "" = own URL
@@ -62,6 +67,10 @@ func newTestIdP(t *testing.T) *testIdP {
 		json.NewEncoder(w).Encode(map[string]string{"issuer": iss, "jwks_uri": idp.srv.URL + "/jwks"})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		idp.mu.Lock()
+		rsaKey, kid, delay := idp.rsaKey, idp.kid(), idp.delay
+		idp.mu.Unlock()
+		time.Sleep(delay)
 		rsaUse := idp.rsaUse
 		if rsaUse == "" {
 			rsaUse = "sig"
@@ -69,7 +78,7 @@ func newTestIdP(t *testing.T) *testIdP {
 		b64 := base64.RawURLEncoding.EncodeToString
 		pad := func(n *big.Int) string { return b64(n.FillBytes(make([]byte, 32))) }
 		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{
-			{"kty": "RSA", "kid": "rsa", "use": rsaUse, "alg": "RS256",
+			{"kty": "RSA", "kid": kid, "use": rsaUse, "alg": "RS256",
 				"n": b64(rsaKey.N.Bytes()), "e": b64(big.NewInt(int64(rsaKey.E)).Bytes())},
 			{"kty": "EC", "kid": "ec", "use": "sig", "alg": "ES256", "crv": "P-256",
 				"x": pad(ecKey.X), "y": pad(ecKey.Y)},
@@ -78,6 +87,26 @@ func newTestIdP(t *testing.T) *testIdP {
 	idp.srv = httptest.NewServer(mux)
 	t.Cleanup(idp.srv.Close)
 	return idp
+}
+
+// kid is the RSA key's kid; callers hold i.mu.
+func (i *testIdP) kid() string {
+	if i.rsaKid == "" {
+		return "rsa"
+	}
+	return i.rsaKid
+}
+
+// rotate replaces the RSA signing key by a new one with a new kid.
+func (i *testIdP) rotate(t *testing.T) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.rsaKey, i.rsaKid = key, i.kid()+"-next"
 }
 
 // issuer is the issuer identifier, with a trailing slash like LS Login's.
@@ -102,8 +131,10 @@ func (i *testIdP) sign(t *testing.T, claims jwt.MapClaims, edit ...func(*jwt.Tok
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["typ"] = "at+jwt"
-	tok.Header["kid"] = "rsa"
+	i.mu.Lock()
+	tok.Header["kid"] = i.kid()
 	var key any = i.rsaKey
+	i.mu.Unlock()
 	for _, e := range edit {
 		e(tok)
 	}
@@ -445,5 +476,70 @@ func TestAuthenticate_SkipsEncryptionKeys(t *testing.T) {
 	a := newTestAuthenticator(t, idp)
 	if _, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls")))); err == nil {
 		t.Fatal("token verified with an encryption key")
+	}
+}
+
+func TestAuthenticate_KeyRotation(t *testing.T) {
+	idp := newTestIdP(t)
+	idp.delay = 20 * time.Millisecond // a refetch must not need to be instant
+	a := newTestAuthenticator(t, idp)
+	if _, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls")))); err != nil {
+		t.Fatal(err)
+	}
+
+	idp.rotate(t)
+	if _, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls")))); err != nil {
+		t.Fatalf("token with the rotated key: %v", err)
+	}
+
+	// The refetch is rate-limited: a second unknown kid right after is
+	// refused at once rather than waiting for the limiter.
+	idp.rotate(t)
+	begin := time.Now()
+	if _, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls")))); err == nil {
+		t.Fatal("second rotation within a minute accepted")
+	}
+	if d := time.Since(begin); d > time.Second {
+		t.Fatalf("rate-limited lookup took %v", d)
+	}
+}
+
+func TestAuthenticate_FailedAttemptsLeaveNoGoroutines(t *testing.T) {
+	idp := newTestIdP(t)
+	a := newTestAuthenticator(t, idp, func(c *Config) { c.Issuers[0].JWKSURI = "http://127.0.0.1:1/jwks" })
+	old := discoveryRetry
+	discoveryRetry = 0
+	t.Cleanup(func() { discoveryRetry = old })
+	token := idp.sign(t, idp.claimsFor("alice@ls"))
+
+	a.Authenticate(request(token)) // warm up
+	before := runtime.NumGoroutine()
+	for n := 0; n < 50; n++ {
+		if _, err := a.Authenticate(request(token)); !errors.Is(err, errUnavailable) {
+			t.Fatalf("err = %v, want errUnavailable", err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // let cancelled refreshers exit
+	if after := runtime.NumGoroutine(); after > before+5 {
+		t.Fatalf("goroutines grew from %d to %d over 50 failed attempts", before, after)
+	}
+}
+
+func TestKeyfunc_PanicDoesNotStickResolving(t *testing.T) {
+	idp := newTestIdP(t)
+	a := newTestAuthenticator(t, idp)
+	iss := a.issuers[idp.issuer()]
+	iss.client = nil // makes resolve panic
+
+	func() {
+		defer func() { _ = recover() }()
+		iss.keyfunc()
+		t.Fatal("resolve did not panic")
+	}()
+	iss.mu.Lock()
+	resolving, lastError := iss.resolving, iss.lastError
+	iss.mu.Unlock()
+	if resolving || !errors.Is(lastError, errUnavailable) {
+		t.Fatalf("after panic: resolving %v, last error %v", resolving, lastError)
 	}
 }

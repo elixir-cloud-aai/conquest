@@ -340,9 +340,10 @@ timeout_seconds: 10         # default; discovery and key set requests
 ```
 
 Issuer and key set URLs must use https (plain http only to a loopback
-host). This slice authenticates callers; who may create runs (an
+host). So far Conquest only authenticates callers; who may create runs (an
 entitlement check at submit) is not enforced yet, so any accepted caller can
-submit.
+submit. The Helm chart can't switch authentication on yet (the environment
+variables and the config file mount come in a follow-up).
 
 The runner callback API (`/internal/runs/...`) has no authentication yet
 and reaches every task. Keep it off any public route: expose only
