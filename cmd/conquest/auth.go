@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/anuragxxd/conquest/internal/auth"
 	"github.com/anuragxxd/conquest/internal/config"
 )
 
-// serviceInfoPaths are the public service-info endpoints.
-var serviceInfoPaths = map[string]bool{
+// serviceInfoRoutes are the route patterns of the service-info endpoints.
+var serviceInfoRoutes = map[string]bool{
 	"/ga4gh/wes/v1/service-info": true,
 	"/ga4gh/tes/v1/service-info": true,
 	"/ga4gh/tes/service-info":    true,
@@ -32,9 +34,7 @@ func newAuthMiddleware(ctx context.Context, cfg *config.Config, log *slog.Logger
 		return nil, err
 	}
 	if cfg.AuthServiceInfoPublic {
-		a.Public = func(r *http.Request) bool {
-			return r.Method == http.MethodGet && serviceInfoPaths[r.URL.Path]
-		}
+		a.Public = isServiceInfo
 	}
 	issuers := make([]string, len(authCfg.Issuers))
 	for i, iss := range authCfg.Issuers {
@@ -42,4 +42,12 @@ func newAuthMiddleware(ctx context.Context, cfg *config.Config, log *slog.Logger
 	}
 	log.Info("authentication enabled", "issuers", issuers, "service_info_public", cfg.AuthServiceInfoPublic)
 	return a.Middleware, nil
+}
+
+// isServiceInfo reports a GET that the router has matched to a
+// service-info route. It looks at the matched route pattern, not at the
+// request path, so that no spelling of a path can borrow the exemption.
+func isServiceInfo(r *http.Request) bool {
+	rctx := chi.RouteContext(r.Context())
+	return r.Method == http.MethodGet && rctx != nil && serviceInfoRoutes[rctx.RoutePattern()]
 }

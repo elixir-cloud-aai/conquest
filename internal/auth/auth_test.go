@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -33,6 +34,8 @@ type testIdP struct {
 	rsaKey    *rsa.PrivateKey
 	ecKey     *ecdsa.PrivateKey
 	discovery string // issuer named by the discovery document; "" = own URL
+	down      bool   // discovery answers 500
+	rsaUse    string // "use" of the RSA key; "" = sig
 }
 
 func newTestIdP(t *testing.T) *testIdP {
@@ -48,6 +51,10 @@ func newTestIdP(t *testing.T) *testIdP {
 	idp := &testIdP{rsaKey: rsaKey, ecKey: ecKey}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		if idp.down {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		iss := idp.discovery
 		if iss == "" {
 			iss = idp.issuer()
@@ -55,10 +62,14 @@ func newTestIdP(t *testing.T) *testIdP {
 		json.NewEncoder(w).Encode(map[string]string{"issuer": iss, "jwks_uri": idp.srv.URL + "/jwks"})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		rsaUse := idp.rsaUse
+		if rsaUse == "" {
+			rsaUse = "sig"
+		}
 		b64 := base64.RawURLEncoding.EncodeToString
 		pad := func(n *big.Int) string { return b64(n.FillBytes(make([]byte, 32))) }
 		json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{
-			{"kty": "RSA", "kid": "rsa", "use": "sig", "alg": "RS256",
+			{"kty": "RSA", "kid": "rsa", "use": rsaUse, "alg": "RS256",
 				"n": b64(rsaKey.N.Bytes()), "e": b64(big.NewInt(int64(rsaKey.E)).Bytes())},
 			{"kty": "EC", "kid": "ec", "use": "sig", "alg": "ES256", "crv": "P-256",
 				"x": pad(ecKey.X), "y": pad(ecKey.Y)},
@@ -203,28 +214,30 @@ func TestAuthenticate_Refused(t *testing.T) {
 		header []func(*jwt.Token)
 		signer *testIdP
 		raw    string // used instead of a signed token when set
+		want   string // part of the error
 	}{
-		{name: "wrong issuer", claims: []func(jwt.MapClaims){set("iss", "https://evil.example/")}},
-		{name: "issuer without trailing slash", claims: []func(jwt.MapClaims){set("iss", strings.TrimSuffix(idp.issuer(), "/"))}},
-		{name: "signed by another key", signer: other},
-		{name: "alg none", header: []func(*jwt.Token){method(jwt.SigningMethodNone)}},
-		{name: "alg HS256", header: []func(*jwt.Token){method(jwt.SigningMethodHS256)}},
-		{name: "alg not allowed", header: []func(*jwt.Token){method(jwt.SigningMethodRS512)}},
-		{name: "unknown kid", header: []func(*jwt.Token){header("kid", "nope")}},
-		{name: "typ JWT (ID token)", header: []func(*jwt.Token){header("typ", "JWT")}},
-		{name: "typ missing", header: []func(*jwt.Token){func(tok *jwt.Token) { delete(tok.Header, "typ") }}},
-		{name: "expired", claims: []func(jwt.MapClaims){set("exp", now.Add(-2*time.Minute).Unix())}},
-		{name: "no exp", claims: []func(jwt.MapClaims){del("exp")}},
-		{name: "nbf in the future", claims: []func(jwt.MapClaims){set("nbf", now.Add(5*time.Minute).Unix())}},
-		{name: "iat in the future", claims: []func(jwt.MapClaims){set("iat", now.Add(5*time.Minute).Unix())}},
-		{name: "no sub", claims: []func(jwt.MapClaims){del("sub")}},
-		{name: "user aud not configured", claims: []func(jwt.MapClaims){set("aud", []string{"other-frontend"})}},
-		{name: "user without aud", claims: []func(jwt.MapClaims){del("aud")}},
-		{name: "listed client, aud is a frontend", claims: []func(jwt.MapClaims){service, set("aud", webClient)}},
-		{name: "listed client, aud has extra entries", claims: []func(jwt.MapClaims){service, set("aud", []string{serviceClient, webClient})}},
-		{name: "user token whose sub is a listed client", claims: []func(jwt.MapClaims){set("sub", serviceClient)}},
-		{name: "unlisted client with own aud", claims: []func(jwt.MapClaims){set("sub", "x"), set("client_id", "x"), set("aud", "x")}},
-		{name: "not a JWS", raw: "not-a-token"},
+		{name: "wrong issuer", claims: []func(jwt.MapClaims){set("iss", "https://evil.example/")}, want: "untrusted issuer"},
+		{name: "issuer without trailing slash", claims: []func(jwt.MapClaims){set("iss", strings.TrimSuffix(idp.issuer(), "/"))}, want: "untrusted issuer"},
+		{name: "signed by another key", signer: other, want: "verification error"},
+		{name: "alg none", header: []func(*jwt.Token){method(jwt.SigningMethodNone)}, want: "signing method none is invalid"},
+		{name: "alg HS256", header: []func(*jwt.Token){method(jwt.SigningMethodHS256)}, want: "signing method HS256 is invalid"},
+		{name: "alg not allowed", header: []func(*jwt.Token){method(jwt.SigningMethodRS512)}, want: "signing method RS512 is invalid"},
+		{name: "unknown kid", header: []func(*jwt.Token){header("kid", "nope")}, want: "key not found"},
+		{name: "typ JWT (ID token)", header: []func(*jwt.Token){header("typ", "JWT")}, want: "is not at+jwt"},
+		{name: "typ missing", header: []func(*jwt.Token){func(tok *jwt.Token) { delete(tok.Header, "typ") }}, want: "is not at+jwt"},
+		{name: "expired", claims: []func(jwt.MapClaims){set("exp", now.Add(-2*time.Minute).Unix())}, want: "token is expired"},
+		{name: "no exp", claims: []func(jwt.MapClaims){del("exp")}, want: "exp claim is required"},
+		{name: "nbf in the future", claims: []func(jwt.MapClaims){set("nbf", now.Add(5*time.Minute).Unix())}, want: "not valid yet"},
+		{name: "iat in the future", claims: []func(jwt.MapClaims){set("iat", now.Add(5*time.Minute).Unix())}, want: "used before issued"},
+		{name: "no sub", claims: []func(jwt.MapClaims){del("sub")}, want: "no sub"},
+		{name: "user aud not configured", claims: []func(jwt.MapClaims){set("aud", []string{"other-frontend"})}, want: "no configured audience"},
+		{name: "user without aud", claims: []func(jwt.MapClaims){del("aud")}, want: "no configured audience"},
+		{name: "listed client, aud is a frontend", claims: []func(jwt.MapClaims){service, set("aud", webClient)}, want: "is not its own client ID"},
+		{name: "listed client, aud has extra entries", claims: []func(jwt.MapClaims){service, set("aud", []string{serviceClient, webClient})}, want: "is not its own client ID"},
+		{name: "user token whose sub is a listed client", claims: []func(jwt.MapClaims){set("sub", serviceClient)}, want: "not that client's own token"},
+		{name: "unlisted client with own aud", claims: []func(jwt.MapClaims){set("sub", "x"), set("client_id", "x"), set("aud", "x")}, want: "no configured audience"},
+		{name: "not a JWS", raw: "not-a-token", want: "malformed token"},
+		{name: "no kid", header: []func(*jwt.Token){func(tok *jwt.Token) { delete(tok.Header, "kid") }}, want: "no kid"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -244,7 +257,9 @@ func TestAuthenticate_Refused(t *testing.T) {
 			if err == nil {
 				t.Fatalf("accepted as %+v", p)
 			}
-			t.Log(err)
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("refused for %q, want %q", err, tt.want)
+			}
 		})
 	}
 }
@@ -347,5 +362,88 @@ func TestMiddleware_DiscoveryFailureIs503(t *testing.T) {
 	a.Middleware(http.NotFoundHandler()).ServeHTTP(w, request(idp.sign(t, idp.claimsFor("alice@ls"))))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
+func TestAuthenticate_AccessTokenTypes(t *testing.T) {
+	idp := newTestIdP(t)
+	a := newTestAuthenticator(t, idp)
+	for _, typ := range []string{"at+jwt", "AT+JWT", "application/at+jwt"} {
+		token := idp.sign(t, idp.claimsFor("alice@ls"), func(tok *jwt.Token) { tok.Header["typ"] = typ })
+		if _, err := a.Authenticate(request(token)); err != nil {
+			t.Errorf("typ %q: %v", typ, err)
+		}
+	}
+}
+
+func TestAuthenticate_DiscoveryRetriesAfterFailure(t *testing.T) {
+	idp := newTestIdP(t)
+	idp.down = true
+	a := newTestAuthenticator(t, idp)
+	token := idp.sign(t, idp.claimsFor("alice@ls"))
+
+	if _, err := a.Authenticate(request(token)); !errors.Is(err, errUnavailable) {
+		t.Fatalf("issuer down: err = %v, want errUnavailable", err)
+	}
+	// Within the retry delay, the failure is answered from memory.
+	idp.down = false
+	if _, err := a.Authenticate(request(token)); !errors.Is(err, errUnavailable) {
+		t.Fatalf("within retry delay: err = %v, want errUnavailable", err)
+	}
+	// After it, discovery is tried again and succeeds.
+	old := discoveryRetry
+	discoveryRetry = 0
+	t.Cleanup(func() { discoveryRetry = old })
+	if _, err := a.Authenticate(request(token)); err != nil {
+		t.Fatalf("issuer back: %v", err)
+	}
+}
+
+func TestAuthenticate_UnreachableKeySetIsUnavailable(t *testing.T) {
+	idp := newTestIdP(t)
+	a := newTestAuthenticator(t, idp, func(c *Config) { c.Issuers[0].JWKSURI = "http://127.0.0.1:1/jwks" })
+	_, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls"))))
+	if !errors.Is(err, errUnavailable) {
+		t.Fatalf("err = %v, want errUnavailable", err)
+	}
+}
+
+func TestAuthenticate_SlowIssuerDoesNotQueueRequests(t *testing.T) {
+	idp := newTestIdP(t)
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+	}))
+	t.Cleanup(slow.Close)
+	t.Cleanup(func() { close(release) })
+	a := newTestAuthenticator(t, idp, func(c *Config) { c.Issuers[0].JWKSURI = slow.URL + "/jwks" })
+	token := idp.sign(t, idp.claimsFor("alice@ls"))
+
+	go a.Authenticate(request(token)) // starts the fetch and hangs on it
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first fetch never started")
+	}
+	begin := time.Now()
+	_, err := a.Authenticate(request(token))
+	if !errors.Is(err, errUnavailable) || !strings.Contains(err.Error(), "being fetched") {
+		t.Fatalf("err = %v, want errUnavailable while the key set is being fetched", err)
+	}
+	if d := time.Since(begin); d > time.Second {
+		t.Fatalf("waiting request took %v", d)
+	}
+}
+
+func TestAuthenticate_SkipsEncryptionKeys(t *testing.T) {
+	idp := newTestIdP(t)
+	idp.rsaUse = "enc"
+	a := newTestAuthenticator(t, idp)
+	if _, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls")))); err == nil {
+		t.Fatal("token verified with an encryption key")
 	}
 }

@@ -302,7 +302,8 @@ A token is accepted when:
   equal a configured issuer exactly, and keys come only from that issuer's
   key set (`jwks_uri`, or discovered from
   `<issuer>/.well-known/openid-configuration`);
-- its `typ` header is `at+jwt` (RFC 9068), which refuses ID tokens;
+- its `typ` header is `at+jwt` or `application/at+jwt` (RFC 9068, any
+  case), which refuses ID tokens;
 - `exp` is present and not past, `nbf` and `iat` are not in the future
   (with `clock_skew_seconds` leeway), and `sub` is set;
 - its audience fits the caller: a **service client** (its `client_id` is
@@ -316,9 +317,11 @@ A token is accepted when:
 The caller owns the runs it creates, as `<iss>|<sub>` (see Run owners), and
 sees only those. Failures answer 401 with `WWW-Authenticate: Bearer` (no
 token) or `Bearer error="invalid_token"`; the cause is logged, never the
-token. If an issuer's discovery document can't be fetched, requests answer
-503 and discovery is retried after 10 seconds. An unknown key ID refetches
-the key set at most once a minute.
+token. Tokens must name their key (`kid`); keys marked for encryption
+(`use: enc`) are not used. If an issuer's discovery document or key set
+can't be fetched, requests answer 503 (also while the first fetch is in
+progress) and the fetch is retried 10 seconds after the failed attempt.
+An unknown key ID refetches the key set at most once a minute.
 
 The issuers live in a YAML file (`CONQUEST_AUTH_CONFIG`, default
 `/etc/conquest/auth/config.yaml`); unknown keys are refused, and the server
@@ -340,6 +343,12 @@ Issuer and key set URLs must use https (plain http only to a loopback
 host). This slice authenticates callers; who may create runs (an
 entitlement check at submit) is not enforced yet, so any accepted caller can
 submit.
+
+The runner callback API (`/internal/runs/...`) has no authentication yet
+and reaches every task. Keep it off any public route: expose only
+`/ga4gh/wes/` (and `/ga4gh/tes/` if needed) through the ingress or
+gateway, and restrict in-cluster access to the server's port with a
+NetworkPolicy where you can. Authenticating the runners is a follow-up.
 
 Upgrading: runs created before authentication have no owner and are no
 longer visible through the API (operators can still inspect and delete them
@@ -557,9 +566,9 @@ No config files.
 | `CONQUEST_S3_BUCKET`                | `conquest-workflows` | Object storage bucket             |
 | `CONQUEST_S3_ENDPOINT`              | —                    | S3 / MinIO endpoint               |
 | `CONQUEST_K8S_NAMESPACE`            | `conquest`           | Kubernetes namespace for Jobs     |
-| `CONQUEST_AUTH_ENABLED`             | `false`              | Require bearer tokens (Authentication) |
-| `CONQUEST_AUTH_SERVICE_INFO_PUBLIC` | `true`               | Keep `service-info` open with auth on |
-| `CONQUEST_AUTH_CONFIG`              | `/etc/conquest/auth/config.yaml` | Issuers, audiences, service clients |
+| `CONQUEST_AUTH_ENABLED`             | `false`              | Require bearer tokens             |
+| `CONQUEST_AUTH_SERVICE_INFO_PUBLIC` | `true`               | Open `service-info` with auth on  |
+| `CONQUEST_AUTH_CONFIG`              | see Authentication   | Issuers and audiences (YAML)      |
 | `CONQUEST_WORKSPACE_MODE`           | `emptydir`           | `emptydir`, `pvc`, or `objectfs`  |
 | `CONQUEST_WORKSPACE_ACCESS_MODE`    | `RWX`                | `RWX` or `RWO` (when mode=pvc)     |
 | `CONQUEST_WORKSPACE_SIZE`           | `10Gi`               | PVC / objectfs volume size        |

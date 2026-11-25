@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/anuragxxd/conquest/internal/config"
 )
 
@@ -25,7 +27,7 @@ func TestNewAuthMiddleware_ServiceInfo(t *testing.T) {
 	if err := os.WriteFile(file, []byte("issuers:\n  - url: http://127.0.0.1:1/\n    audiences: [web]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	for _, public := range []bool{true, false} {
@@ -34,17 +36,32 @@ func TestNewAuthMiddleware_ServiceInfo(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h := mw(ok)
-		for path, wantOpen := range map[string]bool{
-			"/ga4gh/wes/v1/service-info": public,
-			"/ga4gh/tes/v1/service-info": public,
-			"/ga4gh/tes/service-info":    public,
-			"/ga4gh/wes/v1/runs":         false,
+		// Routed as in api.NewRouterWithAuth: the middleware sits in a
+		// group, so it runs after the route has been matched.
+		r := chi.NewRouter()
+		r.Group(func(r chi.Router) {
+			r.Use(mw)
+			for pattern := range serviceInfoRoutes {
+				r.Get(pattern, ok)
+				r.Post(pattern, ok)
+			}
+			r.Get("/ga4gh/wes/v1/runs/{run_id}", ok)
+		})
+		for _, tt := range []struct {
+			method, path string
+			open         bool
+		}{
+			{http.MethodGet, "/ga4gh/wes/v1/service-info", public},
+			{http.MethodGet, "/ga4gh/tes/v1/service-info", public},
+			{http.MethodGet, "/ga4gh/tes/service-info", public},
+			{http.MethodPost, "/ga4gh/wes/v1/service-info", false},
+			{http.MethodGet, "/ga4gh/wes/v1/runs/service-info", false},
+			{http.MethodGet, "/ga4gh/wes/v1/runs/r1", false},
 		} {
 			w := httptest.NewRecorder()
-			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-			if got := w.Code == http.StatusOK; got != wantOpen {
-				t.Errorf("public=%v %s: status %d", public, path, w.Code)
+			r.ServeHTTP(w, httptest.NewRequest(tt.method, tt.path, nil))
+			if got := w.Code == http.StatusOK; got != tt.open {
+				t.Errorf("public=%v %s %s: status %d", public, tt.method, tt.path, w.Code)
 			}
 		}
 	}

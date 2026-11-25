@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MicahParks/jwkset"
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/time/rate"
@@ -52,6 +53,17 @@ type Principal struct {
 
 // Owner is the caller's owner identifier: "<iss>|<sub>".
 func (p *Principal) Owner() string { return p.Issuer + "|" + p.Subject }
+
+// authContext is what runs record about how their owner authenticated:
+// identifiers only, never the token.
+func (p *Principal) authContext() json.RawMessage {
+	// Marshalling two strings cannot fail.
+	raw, _ := json.Marshal(struct {
+		ClientID string `json:"client_id,omitempty"`
+		Scope    string `json:"scope,omitempty"`
+	}{p.ClientID, p.Scope})
+	return raw
+}
 
 type principalKey struct{}
 
@@ -84,12 +96,13 @@ type issuer struct {
 
 	mu        sync.Mutex
 	keys      keyfunc.Keyfunc
+	resolving bool
 	lastTry   time.Time
 	lastError error
 }
 
 // discoveryRetry is how long a failed discovery is not retried.
-const discoveryRetry = 10 * time.Second
+var discoveryRetry = 10 * time.Second
 
 // New creates an Authenticator. ctx ends the background refreshes of the
 // issuers' key sets. Key sets are resolved on first use, so an issuer that
@@ -141,20 +154,24 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	}
 	iss, ok := a.issuers[unverified.Issuer]
 	if !ok {
-		return nil, fmt.Errorf("untrusted issuer %q", unverified.Issuer)
+		return nil, fmt.Errorf("untrusted issuer %q", truncate(unverified.Issuer, 256))
 	}
 	keys, err := iss.keyfunc()
 	if err != nil {
 		return nil, err
 	}
 
+	// The key is chosen by kid only, never by trying every key of the set.
+	kidKeyfunc := func(t *jwt.Token) (any, error) {
+		if kid, _ := t.Header["kid"].(string); kid == "" {
+			return nil, fmt.Errorf("token has no kid")
+		}
+		return keys.KeyfuncCtx(r.Context())(t)
+	}
 	var c claims
-	token, err := a.parser.ParseWithClaims(raw, &c, keys.KeyfuncCtx(r.Context()))
+	token, err := a.parser.ParseWithClaims(raw, &c, kidKeyfunc)
 	if err != nil {
 		return nil, fmt.Errorf("invalid token: %w", err)
-	}
-	if c.Issuer != iss.cfg.URL {
-		return nil, fmt.Errorf("issuer changed between parses")
 	}
 	if typ, _ := token.Header["typ"].(string); !isAccessTokenType(typ) {
 		return nil, fmt.Errorf("token typ %q is not at+jwt", typ)
@@ -205,12 +222,8 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		authContext, _ := json.Marshal(struct {
-			ClientID string `json:"client_id,omitempty"`
-			Scope    string `json:"scope,omitempty"`
-		}{p.ClientID, p.Scope})
 		ctx := context.WithValue(r.Context(), principalKey{}, p)
-		ctx = ownership.NewContext(ctx, ownership.Owner{ID: p.Owner(), Context: authContext})
+		ctx = ownership.NewContext(ctx, ownership.Owner{ID: p.Owner(), Context: p.authContext()})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -243,6 +256,14 @@ func isAccessTokenType(typ string) bool {
 	return strings.EqualFold(typ, "at+jwt") || strings.EqualFold(typ, "application/at+jwt")
 }
 
+// truncate shortens untrusted values before they are logged.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
 func containsAny(have jwt.ClaimStrings, want []string) bool {
 	for _, h := range have {
 		for _, w := range want {
@@ -254,46 +275,79 @@ func containsAny(have jwt.ClaimStrings, want []string) bool {
 	return false
 }
 
-// keyfunc returns the issuer's key set, resolving it on first use.
+// keyfunc returns the issuer's key set, resolving it on first use. Only one
+// request resolves at a time, without holding the lock; requests that
+// arrive meanwhile, or within discoveryRetry after a failure, fail fast
+// with errUnavailable instead of queueing behind a slow issuer.
 func (i *issuer) keyfunc() (keyfunc.Keyfunc, error) {
 	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.keys != nil {
+	switch {
+	case i.keys != nil:
+		defer i.mu.Unlock()
 		return i.keys, nil
-	}
-	if !i.lastTry.IsZero() && time.Since(i.lastTry) < discoveryRetry {
+	case i.resolving:
+		i.mu.Unlock()
+		return nil, fmt.Errorf("%w: issuer %s: key set being fetched", errUnavailable, i.cfg.URL)
+	case !i.lastTry.IsZero() && time.Since(i.lastTry) < discoveryRetry:
+		defer i.mu.Unlock()
 		return nil, i.lastError
 	}
-	i.lastTry = time.Now()
-	jwksURI := i.cfg.JWKSURI
-	if jwksURI == "" {
-		var err error
-		if jwksURI, err = i.discover(); err != nil {
-			i.lastError = fmt.Errorf("%w: issuer %s: %v", errUnavailable, i.cfg.URL, err)
-			return nil, i.lastError
-		}
-	}
-	keys, err := keyfunc.NewDefaultOverrideCtx(i.ctx, []string{jwksURI}, keyfunc.Override{
-		Client:      i.client,
-		HTTPTimeout: i.client.Timeout,
-		// An unknown kid refetches the key set at most once a minute and
-		// never makes a request wait for that.
-		RefreshUnknownKID: rate.NewLimiter(rate.Every(time.Minute), 1),
-		RateLimitWaitMax:  time.Millisecond,
-	})
+	i.resolving = true
+	i.mu.Unlock()
+
+	keys, err := i.resolve()
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.resolving = false
+	i.lastTry = time.Now() // the retry delay starts when the attempt ends
 	if err != nil {
-		i.lastError = fmt.Errorf("%w: issuer %s: key set: %v", errUnavailable, i.cfg.URL, err)
+		i.lastError = fmt.Errorf("%w: issuer %s: %v", errUnavailable, i.cfg.URL, err)
 		return nil, i.lastError
 	}
 	i.keys = keys
 	return keys, nil
 }
 
+// resolve discovers the issuer's key set (unless configured) and fetches it.
+func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
+	jwksURI := i.cfg.JWKSURI
+	if jwksURI == "" {
+		var err error
+		if jwksURI, err = i.discover(); err != nil {
+			return nil, err
+		}
+	}
+	failFirst := false // a key set that can't be fetched is an error, retried later
+	keys, err := keyfunc.NewDefaultOverrideCtx(i.ctx, []string{jwksURI}, keyfunc.Override{
+		Client:                    i.client,
+		HTTPTimeout:               i.client.Timeout,
+		NoErrorReturnFirstHTTPReq: &failFirst,
+		// An unknown kid refetches the key set at most once a minute and
+		// never makes a request wait for that.
+		RefreshUnknownKID: rate.NewLimiter(rate.Every(time.Minute), 1),
+		RateLimitWaitMax:  time.Millisecond,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("key set: %w", err)
+	}
+	// Only signing keys (or keys that don't say) verify tokens.
+	return keyfunc.New(keyfunc.Options{
+		Ctx:          i.ctx,
+		Storage:      keys.Storage(),
+		UseWhitelist: []jwkset.USE{jwkset.UseSig, ""},
+	})
+}
+
 // discover reads jwks_uri from the issuer's OpenID Connect discovery
 // document, which must name the configured issuer exactly.
 func (i *issuer) discover() (string, error) {
 	u := strings.TrimSuffix(i.cfg.URL, "/") + "/.well-known/openid-configuration"
-	resp, err := i.client.Get(u)
+	req, err := http.NewRequestWithContext(i.ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := i.client.Do(req)
 	if err != nil {
 		return "", err
 	}
