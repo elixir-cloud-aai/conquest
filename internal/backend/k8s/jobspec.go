@@ -176,6 +176,11 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 
 	// How the filer reaches object storage.
 	storageEnv, storageCredentials := taskStorageEnv(task, cfg)
+	manifestEnv := corev1.EnvVar{Name: "STAGE_MANIFEST", Value: string(manifestJSON)}
+	stageInEnv := append(append([]corev1.EnvVar{}, storageEnv...), manifestEnv)
+	stageInEnv = append(append(stageInEnv, sharedWorkspaceEnv...), storageCredentials...)
+	executorEnv := append(append([]corev1.EnvVar{}, envVars...), manifestEnv)
+	executorEnv = append(append(executorEnv, storageEnv...), storageCredentials...)
 
 	// Build pod affinity for RWO co-location (nil for other modes).
 	affinity := ws.TaskAffinity(task.Workspace, task.RunID)
@@ -227,9 +232,7 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 								"/tools/conquest", "filer", "stage-in",
 								"--manifest", "/stage/manifest.json",
 							},
-							Env: append(append(append(append([]corev1.EnvVar{}, storageEnv...),
-								corev1.EnvVar{Name: "STAGE_MANIFEST", Value: string(manifestJSON)},
-							), sharedWorkspaceEnv...), storageCredentials...),
+							Env: stageInEnv,
 							VolumeMounts: append(append([]corev1.VolumeMount{}, workdirMounts...),
 								corev1.VolumeMount{Name: "stage-manifest", MountPath: "/stage"},
 								corev1.VolumeMount{Name: "tools", MountPath: "/tools"},
@@ -248,14 +251,8 @@ func buildJobSpec(task *domain.Task, cfg Config, ws WorkspaceStrategy) (*batchv1
 							Command:         append([]string{"/tools/conquest", "filer", "exec", "--"}, exec.Command...),
 							WorkingDir:      workdir,
 							SecurityContext: containerSecurityContext(cfg.PodSecurity),
-							Env: append(
-								append(
-									append([]corev1.EnvVar{}, envVars...),
-									corev1.EnvVar{Name: "STAGE_MANIFEST", Value: string(manifestJSON)},
-								),
-								append(append([]corev1.EnvVar{}, storageEnv...), storageCredentials...)...,
-							),
-							Resources: execResources,
+							Env:             executorEnv,
+							Resources:       execResources,
 							VolumeMounts: append(append([]corev1.VolumeMount{}, workdirMounts...),
 								corev1.VolumeMount{Name: "tools", MountPath: "/tools"},
 								corev1.VolumeMount{Name: "stage-manifest", MountPath: "/stage"},

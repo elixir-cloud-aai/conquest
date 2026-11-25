@@ -50,6 +50,7 @@ jobs:
   # (SeaweedFS: MinIO publishes no images any more)
   storage-integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -67,8 +68,10 @@ jobs:
             chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59 \
             server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json \
             -master.volumeSizeLimitMB=64 -volume.max=20
+          # ready once S3 refuses an unsigned request
           for i in $(seq 1 60); do
-            curl -s -o /dev/null http://127.0.0.1:8333/ && exit 0
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)"
+            [ "$code" = 403 ] && exit 0
             sleep 1
           done
           docker logs s3

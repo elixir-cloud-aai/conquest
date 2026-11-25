@@ -1,11 +1,9 @@
 //go:build integration
 
-// Run against an S3 server that checks signatures, such as MinIO or SeaweedFS
-// (as CI does):
+// Run against an S3 server that checks signatures, such as MinIO or
+// SeaweedFS started as in the storage-integration job of
+// .github/workflows/ci.yaml, then:
 //
-//	docker run -d --rm -p 127.0.0.1:8333:8333 \
-//	  -v $PWD/internal/isolation/testdata/s3.json:/etc/seaweedfs/s3.json:ro \
-//	  chrislusf/seaweedfs:4.52 server -dir=/data -s3 -s3.config=/etc/seaweedfs/s3.json
 //	CONQUEST_TEST_S3_ENDPOINT=http://127.0.0.1:8333 \
 //	CONQUEST_TEST_S3_ACCESS_KEY=conquest-test CONQUEST_TEST_S3_SECRET_KEY=conquest-test-secret \
 //	go test -tags integration ./internal/isolation/

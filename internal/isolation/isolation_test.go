@@ -266,3 +266,48 @@ func TestRunBound(t *testing.T) {
 		t.Errorf("no bucket: bound = %q", got)
 	}
 }
+
+// errorServer answers every request with the status (and Location) given.
+func errorServer(t *testing.T, status int, location, body string) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if location != "" {
+			w.Header().Set("Location", location)
+		}
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return NewClient(srv.URL+"/storage/v1/t/t1/sig", nil)
+}
+
+func TestClientErrors(t *testing.T) {
+	ctx := context.Background()
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "AccessDenied", http.StatusForbidden)
+	}))
+	defer s3.Close()
+
+	for name, c := range map[string]*Client{
+		"gateway refuses":         errorServer(t, http.StatusForbidden, "", "object not in the task's inputs or outputs"),
+		"task ended":              errorServer(t, http.StatusGone, "", "task has ended"),
+		"redirect without target": errorServer(t, http.StatusTemporaryRedirect, "", ""),
+		"presigned URL refused":   errorServer(t, http.StatusTemporaryRedirect, s3.URL+"/b/k", ""),
+	} {
+		if _, err := c.Get(ctx, "b", "k"); err == nil {
+			t.Errorf("%s: Get: want an error", name)
+		}
+		if err := c.Put(ctx, "b", "k", strings.NewReader("x"), 1); err == nil {
+			t.Errorf("%s: Put: want an error", name)
+		}
+		if _, err := c.Exists(ctx, "b", "k"); err == nil {
+			t.Errorf("%s: Exists: want an error", name)
+		}
+	}
+	if _, err := errorServer(t, http.StatusOK, "", "not json").ListPrefix(ctx, "b", "p"); err == nil {
+		t.Error("ListPrefix of malformed JSON: want an error")
+	}
+	if _, err := errorServer(t, http.StatusForbidden, "", "no").ListPrefix(ctx, "b", "p"); err == nil {
+		t.Error("ListPrefix refused: want an error")
+	}
+}

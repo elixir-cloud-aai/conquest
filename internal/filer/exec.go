@@ -63,7 +63,8 @@ func ExecAndStageOut(ctx context.Context, manifestJSON string, command []string,
 
 	// Build S3 client.
 	var client objstore.Client
-	if gw, ok := isolation.ClientFromEnv(); ok && manifestNeedsObjectStoreForStageOut(manifest) {
+	gw, isolated := isolation.ClientFromEnv()
+	if isolated {
 		// Without S3 credentials: through the storage gateway.
 		client = gw
 	} else if manifestNeedsObjectStoreForStageOut(manifest) {

@@ -256,7 +256,8 @@ in-cluster address, in `CONQUEST_TASK_STORAGE_URL`:
 <CONQUEST_INTERNAL_BASE_URL>/storage/v1/t/<task ID>/<HMAC>
 ```
 
-The filer reads `<that URL>/<bucket>/<key>` and follows the `307` to an S3 URL
+The executor (the user's code) can read this URL too; it reaches only what
+the task itself may. The filer reads `<that URL>/<bucket>/<key>` and follows the `307` to an S3 URL
 presigned for that object and method; a `GET` of a prefix URL (ending in `/`)
 below a `DIRECTORY` input lists the keys there. What a task may reach is
 decided from its stored TES request as for remote endpoints, and is bounded to
@@ -270,8 +271,10 @@ after the task ends.
   `storageGateway.existingSecret` or generates one) and the server's own S3
   credentials; `CONQUEST_STORAGE_GATEWAY_URL` is needed only for remote
   endpoints.
-- Task pods must reach Conquest's Service and the presign endpoint:
-  `CONQUEST_S3_PUBLIC_ENDPOINT` if set, else `CONQUEST_S3_ENDPOINT`.
+- Task pods must reach Conquest's Service at `CONQUEST_INTERNAL_BASE_URL`
+  (the chart sets it; its built-in default fits only the `services`
+  namespace) and the presign endpoint: `CONQUEST_S3_PUBLIC_ENDPOINT` if set,
+  else `CONQUEST_S3_ENDPOINT`.
 - `s3://` inputs and outputs must lie below the run's root. Inputs elsewhere
   in the bucket (e.g. shared reference data) are refused; standalone TES
   tasks (no WES run) reach only their own stub run's prefix.
@@ -400,7 +403,8 @@ can't list. Remote sites then need only to reach the gateway and the
 presigned S3 endpoint (`storageGateway.s3PublicEndpoint`), and must follow
 `307` on PUT: Funnel (since #1472), tesk-core (since #61) and Poiesis (since
 #103) do. The gateway works over plain HTTP, but the URLs are bearer
-capabilities: use HTTPS outside trusted networks.
+capabilities: use HTTPS outside trusted networks. Conquest's own task pods
+can use the gateway too (see [Storage Isolation](#storage-isolation)).
 
 **Requirements on remote sites** (none of these can be expressed in TES):
 

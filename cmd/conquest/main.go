@@ -234,7 +234,7 @@ func run(log *slog.Logger) error {
 			PodSecurity:       podSecurity,
 			HelperResources:   helperResources,
 		}
-		if gateway != nil && cfg.StorageIsolation {
+		if cfg.StorageIsolation {
 			backendCfg.TaskStorageURL = func(taskID string) string {
 				return gateway.TaskRoot(cfg.InternalBaseURL, taskID)
 			}
