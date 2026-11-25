@@ -17,6 +17,22 @@ func newTestRun() *domain.Run {
 	return domain.NewRun("NFL", "DSL2", "nextflow", "25.10.4", []byte(`{}`), "s3://b/o/", "v1", "s3://b/r/")
 }
 
+// createTestTask stores a task of runID and cancels it, so that it never
+// reaches the dispatch queue that TestDispatchQueue inspects.
+func createTestTask(t *testing.T, tasks *TaskStore, runID string) *domain.Task {
+	t.Helper()
+	ctx := context.Background()
+	task := domain.NewTask(runID)
+	task.TESTaskID = task.TaskID
+	if err := tasks.Create(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.UpdateState(ctx, task.TaskID, domain.StateQueued, domain.StateCanceled); err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
 // ownerPrefix keeps owners unique per test run, so that the tests work on
 // a database that already holds runs.
 var ownerPrefix = "test|" + domain.NewID() + "|"
@@ -70,15 +86,8 @@ func TestOwnership_ScopedReads(t *testing.T) {
 	if err := runs.Create(ctx, legacy); err != nil {
 		t.Fatal(err)
 	}
-	ownTask := domain.NewTask(own.RunID)
-	ownTask.TESTaskID = ownTask.TaskID
-	legacyTask := domain.NewTask(legacy.RunID)
-	legacyTask.TESTaskID = legacyTask.TaskID
-	for _, task := range []*domain.Task{ownTask, legacyTask} {
-		if err := tasks.Create(ctx, task); err != nil {
-			t.Fatal(err)
-		}
-	}
+	ownTask := createTestTask(t, tasks, own.RunID)
+	legacyTask := createTestTask(t, tasks, legacy.RunID)
 
 	type access struct {
 		name   string
@@ -145,11 +154,7 @@ func TestOwnership_ListPagesPerOwner(t *testing.T) {
 			t.Fatal(err)
 		}
 		want[run.RunID] = true
-		task := domain.NewTask(run.RunID)
-		task.TESTaskID = task.TaskID
-		if err := tasks.Create(ctx, task); err != nil {
-			t.Fatal(err)
-		}
+		task := createTestTask(t, tasks, run.RunID)
 		wantTasks[task.TaskID] = true
 
 		// interleave someone else's and an ownerless run
@@ -207,5 +212,57 @@ func TestOwnership_ListPagesPerOwner(t *testing.T) {
 	}
 	if len(gotTasks) != len(wantTasks) {
 		t.Fatalf("listed %d tasks, want %d", len(gotTasks), len(wantTasks))
+	}
+
+	// An owner without runs gets an empty first page.
+	empty, err := runs.List(ownership.NewContext(ctx, ownership.Owner{ID: ownerPrefix + "none"}), repository.Page{Size: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Items) != 0 || empty.NextToken != "" {
+		t.Fatalf("owner without runs listed %d runs, next %q", len(empty.Items), empty.NextToken)
+	}
+}
+
+func TestOwnership_ListByRunIDPages(t *testing.T) {
+	ctx := context.Background()
+	runs, tasks := testStores(t)
+	owner := ownership.NewContext(ctx, ownership.Owner{ID: ownerPrefix + "pager"})
+	other := ownership.NewContext(ctx, ownership.Owner{ID: ownerPrefix + "pager-other"})
+
+	run := newTestRun()
+	if err := runs.Create(owner, run); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		createTestTask(t, tasks, run.RunID)
+		time.Sleep(time.Millisecond)
+	}
+
+	count := func(c context.Context) int {
+		t.Helper()
+		n, token := 0, ""
+		for pages := 0; ; pages++ {
+			if pages > 5 {
+				t.Fatal("too many pages")
+			}
+			page, err := tasks.ListByRunID(c, run.RunID, repository.Page{Size: 2, Token: token})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n += len(page.Items)
+			if token = page.NextToken; token == "" {
+				return n
+			}
+		}
+	}
+	if n := count(owner); n != 5 {
+		t.Fatalf("owner paged %d tasks, want 5", n)
+	}
+	if n := count(ctx); n != 5 {
+		t.Fatalf("unscoped paged %d tasks, want 5", n)
+	}
+	if n := count(other); n != 0 {
+		t.Fatalf("other owner paged %d tasks, want 0", n)
 	}
 }

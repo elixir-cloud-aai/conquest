@@ -164,11 +164,18 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		}
 		runID = stubRun.RunID
 	} else {
-		// Load the run to inherit workspace binding.
+		// Load the run to inherit workspace binding. A run the caller can't
+		// read (missing, or another owner's) takes no tasks.
 		run, err := h.runs.Get(r.Context(), runID)
-		if err == nil {
-			workspace = run.Workspace
+		if errors.Is(err, pg.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
 		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		workspace = run.Workspace
 	}
 
 	h.createAndSubmitTask(w, r, &req, runID, workspace)

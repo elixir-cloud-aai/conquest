@@ -276,10 +276,11 @@ Every run can record the caller that created it (`runs.owner`, migration
 an owner, new runs are stamped with that owner, and the repository returns
 only that owner's runs and their tasks: another owner's run or task, or one
 created without an owner, reads as not found. A context without an owner is
-unscoped, which is how Conquest behaves today: nothing sets an owner until
-authentication is configured, so existing deployments see no change.
-Internal callers (reconcilers, the dispatcher, the runner callback API) stay
-unscoped.
+unscoped and sees every run, as before; no code path sets an owner yet, so
+existing deployments see no change. Only reads are scoped: writes address a
+run or task that a scoped read has returned, and aggregates (the state
+counts in `service-info`) and internal callers (reconcilers, the dispatcher,
+the runner callback API) stay unscoped.
 
 ## Federation: Remote TES Endpoints
 
@@ -468,12 +469,15 @@ make test-short    # go test -short -race ./...
 ```
 
 The PostgreSQL repository tests carry the build tag `integration` and need a
-migrated database (CI runs them in the `Integration tests` job, which also
-rolls the newest migration back and forth):
+migrated database; without `CONQUEST_TEST_POSTGRES_DSN` they skip. CI runs
+them in the `Integration tests` job, which also rolls the newest migration
+back and forth. Locally, with
+[migrate](https://github.com/golang-migrate/migrate) installed:
 
 ```bash
+export CONQUEST_TEST_POSTGRES_DSN=postgres://...
 migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" up
-CONQUEST_TEST_POSTGRES_DSN=postgres://... go test -tags integration ./internal/repository/pg/
+go test -tags integration ./internal/repository/pg/
 ```
 
 ## Configuration

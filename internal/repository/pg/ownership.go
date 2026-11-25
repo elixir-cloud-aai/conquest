@@ -17,24 +17,26 @@ import (
 // scoped read has returned it. Aggregates (CountByState) and the internal
 // scans used by reconcilers stay unscoped.
 
-// runOwnerFilter returns " AND owner = $n" and its argument for a context
-// scoped to an owner, or "" and no argument for an unscoped one. n is the
-// placeholder number of the argument.
-func runOwnerFilter(ctx context.Context, n int) (string, []any) {
+// runOwnerFilter returns " AND owner = $n" and args with the owner appended
+// (n = len(args)+1) for a context scoped to an owner, or "" and args
+// unchanged for an unscoped one.
+func runOwnerFilter(ctx context.Context, args ...any) (string, []any) {
 	owner, ok := ownership.FromContext(ctx)
 	if !ok {
-		return "", nil
+		return "", args
 	}
-	return fmt.Sprintf(" AND owner = $%d", n), []any{owner.ID}
+	args = append(args, owner.ID)
+	return fmt.Sprintf(" AND owner = $%d", len(args)), args
 }
 
 // taskOwnerFilter is runOwnerFilter for queries on tasks: a task belongs to
 // the owner of its run.
-func taskOwnerFilter(ctx context.Context, n int) (string, []any) {
+func taskOwnerFilter(ctx context.Context, args ...any) (string, []any) {
 	owner, ok := ownership.FromContext(ctx)
 	if !ok {
-		return "", nil
+		return "", args
 	}
-	return fmt.Sprintf(" AND EXISTS (SELECT 1 FROM runs WHERE runs.run_id = tasks.run_id AND runs.owner = $%d)", n),
-		[]any{owner.ID}
+	args = append(args, owner.ID)
+	return fmt.Sprintf(" AND EXISTS (SELECT 1 FROM runs WHERE runs.run_id = tasks.run_id AND runs.owner = $%d)", len(args)),
+		args
 }

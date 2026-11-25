@@ -28,7 +28,9 @@ func NewRunStore(pool *pgxpool.Pool) *RunStore {
 }
 
 // Create persists a new run. In a context scoped to an owner (package
-// ownership), the run is stamped with that owner, whatever run.Owner says.
+// ownership), the run is stamped with that owner, whatever run.Owner says,
+// and run.Owner and run.AuthContext are set to what was stored. An empty
+// owner ID is stored as NULL: such a run belongs to nobody.
 func (s *RunStore) Create(ctx context.Context, run *domain.Run) error {
 	if owner, ok := ownership.FromContext(ctx); ok {
 		run.Owner, run.AuthContext = owner.ID, owner.Context
@@ -107,9 +109,9 @@ func scanRunFields(s interface{ Scan(dest ...any) error }) (*domain.Run, error) 
 }
 
 func (s *RunStore) Get(ctx context.Context, runID string) (*domain.Run, error) {
-	filter, args := runOwnerFilter(ctx, 2)
+	filter, args := runOwnerFilter(ctx, runID)
 	row := s.pool.QueryRow(ctx,
-		`SELECT `+runColumns+` FROM runs WHERE run_id = $1`+filter, append([]any{runID}, args...)...)
+		`SELECT `+runColumns+` FROM runs WHERE run_id = $1`+filter, args...)
 	r, err := scanRunFields(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -122,9 +124,9 @@ func (s *RunStore) Get(ctx context.Context, runID string) (*domain.Run, error) {
 
 func (s *RunStore) GetStatus(ctx context.Context, runID string) (domain.State, error) {
 	var stateStr string
-	filter, args := runOwnerFilter(ctx, 2)
+	filter, args := runOwnerFilter(ctx, runID)
 	err := s.pool.QueryRow(ctx,
-		`SELECT state FROM runs WHERE run_id = $1`+filter, append([]any{runID}, args...)...,
+		`SELECT state FROM runs WHERE run_id = $1`+filter, args...,
 	).Scan(&stateStr)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
@@ -144,23 +146,23 @@ func (s *RunStore) List(ctx context.Context, page repository.Page) (*repository.
 	var err error
 
 	if page.Token == "" {
-		filter, args := runOwnerFilter(ctx, 2)
+		filter, args := runOwnerFilter(ctx, limit+1)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+runColumns+` FROM runs
 			WHERE TRUE`+filter+`
 			ORDER BY created_at DESC, run_id DESC
-			LIMIT $1`, append([]any{limit + 1}, args...)...)
+			LIMIT $1`, args...)
 	} else {
 		cursorTime, cursorID, parseErr := parseCursor(page.Token)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid page token: %w", parseErr)
 		}
-		filter, args := runOwnerFilter(ctx, 4)
+		filter, args := runOwnerFilter(ctx, cursorTime, cursorID, limit+1)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+runColumns+` FROM runs
 			WHERE (created_at, run_id) < ($1, $2)`+filter+`
 			ORDER BY created_at DESC, run_id DESC
-			LIMIT $3`, append([]any{cursorTime, cursorID, limit + 1}, args...)...)
+			LIMIT $3`, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list runs: %w", err)

@@ -36,8 +36,10 @@ type Run struct {
 	Workspace             *WorkspaceBinding `json:"workspace,omitempty"`
 	// Owner identifies the caller that created the run (see package
 	// ownership); empty for runs created without authentication.
-	Owner       string          `json:"owner,omitempty"`
-	AuthContext json.RawMessage `json:"auth_context,omitempty"` // how the owner authenticated (identifiers only)
+	// AuthContext records how the owner authenticated (identifiers only).
+	// Neither is serialised, so that no response leaks them by accident.
+	Owner       string          `json:"-"`
+	AuthContext json.RawMessage `json:"-"`
 }
 
 // NewRun creates a Run in QUEUED state with a fresh UUIDv7 ID.
