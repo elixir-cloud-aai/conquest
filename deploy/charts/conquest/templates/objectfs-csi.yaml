@@ -114,6 +114,10 @@ spec:
       containers:
         - name: csi-provisioner
           image: {{ .Values.objectfs.csiProvisionerImage }}
+          {{- with .Values.objectfs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - "--csi-address=$(ADDRESS)"
             - "--v=4"
@@ -126,6 +130,10 @@ spec:
               mountPath: /var/lib/kubelet/plugins/ru.yandex.s3.csi
         - name: csi-s3
           image: {{ .Values.objectfs.csiS3Image }}
+          {{- with .Values.objectfs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           imagePullPolicy: IfNotPresent
           args:
             - "--endpoint=$(CSI_ENDPOINT)"
@@ -195,6 +203,10 @@ spec:
       containers:
         - name: driver-registrar
           image: {{ .Values.objectfs.csiRegistrarImage }}
+          {{- with .Values.objectfs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           args:
             - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
             - "--v=4"
@@ -220,6 +232,10 @@ spec:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
           image: {{ .Values.objectfs.csiS3Image }}
+          {{- with .Values.objectfs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           imagePullPolicy: IfNotPresent
           args:
             - "--endpoint=$(CSI_ENDPOINT)"

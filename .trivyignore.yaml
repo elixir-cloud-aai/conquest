@@ -1,0 +1,4 @@
+# Accepted Trivy findings, left out of every image scan (.github/workflows/ghcr.yaml).
+# Each entry needs a reason (statement) and, where possible, an expiry date. See
+# https://trivy.dev/latest/docs/configuration/filtering/#trivyignoreyaml
+vulnerabilities: []

@@ -81,6 +81,12 @@ type Config struct {
 	PodRunAsUser  int64  // default: 1000
 	PodRunAsGroup int64  // default: 1000; also the pod fsGroup
 
+	// TaskHelperResources are the resources of the helper containers of task
+	// pods (copy-tools, stage-in) as JSON in the shape of a container's
+	// `resources`. Empty (default): none. Parsed and validated at startup
+	// (see k8s.ParseHelperResources).
+	TaskHelperResources string
+
 	// FederationConfigFile is the YAML file of remote TES endpoints and
 	// routing rules (see internal/backend/routing). Empty: every task runs
 	// on the local Kubernetes backend.
@@ -189,6 +195,8 @@ func Load() (*Config, error) {
 		PodSecurity:   envOr("CONQUEST_POD_SECURITY", "restricted"),
 		PodRunAsUser:  int64(envIntOr("CONQUEST_POD_RUN_AS_USER", 1000)),
 		PodRunAsGroup: int64(envIntOr("CONQUEST_POD_RUN_AS_GROUP", 1000)),
+
+		TaskHelperResources: strings.TrimSpace(os.Getenv("CONQUEST_TASK_HELPER_RESOURCES")),
 	}
 
 	// Default CSI secret namespace to the K8s namespace if not explicitly set.

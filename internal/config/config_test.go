@@ -201,3 +201,26 @@ func TestLoad_FloorsTaskMemoryByDefault(t *testing.T) {
 		t.Fatalf("task RAM floor with CONQUEST_TASK_MIN_RAM_GB=0 = %v, want 0", cfg.TaskMinRAMGb)
 	}
 }
+
+func TestLoad_ReadsTaskHelperResources(t *testing.T) {
+	t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
+	t.Setenv("CONQUEST_S3_BUCKET", "conquest")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TaskHelperResources != "" {
+		t.Fatalf("default task helper resources = %q, want none", cfg.TaskHelperResources)
+	}
+
+	raw := `{"limits": {"cpu": "500m"}}`
+	t.Setenv("CONQUEST_TASK_HELPER_RESOURCES", raw)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.TaskHelperResources != raw {
+		t.Fatalf("task helper resources = %q, want %q", cfg.TaskHelperResources, raw)
+	}
+}

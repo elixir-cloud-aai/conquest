@@ -72,6 +72,10 @@ spec:
               value: "postgres://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST):$(DATABASE_PORT)/$(DATABASE_NAME)?sslmode=disable"
           securityContext:
             {{- toYaml .Values.conquest.containerSecurityContext | nindent 12 }}
+          {{- with .Values.conquest.migration.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
 
       containers:
         - name: {{ include "conquest.fullname" . }}
@@ -224,6 +228,10 @@ spec:
               value: {{ .Values.conquest.podSecurity.runAsUser | quote }}
             - name: CONQUEST_POD_RUN_AS_GROUP
               value: {{ .Values.conquest.podSecurity.runAsGroup | quote }}
+            {{- with .Values.conquest.taskHelperResources }}
+            - name: CONQUEST_TASK_HELPER_RESOURCES
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- if .Values.storageGateway.enabled }}
             - name: CONQUEST_STORAGE_GATEWAY_URL
               value: {{ required "storageGateway.publicURL is required" .Values.storageGateway.publicURL | quote }}

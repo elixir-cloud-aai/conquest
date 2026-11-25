@@ -114,6 +114,19 @@ from input sizes, and a container can't start under a few MiB. See
 `CONQUEST_TASK_DEFAULT_*`, `CONQUEST_TASK_MIN_*`, and `CONQUEST_TASK_MAX_*`
 in [`internal/config/config.go`](internal/config/config.go).
 
+These resources apply to the executor container. The task pod's helper init
+containers (`copy-tools`, `stage-in`) get none by default, so a namespace
+LimitRange, if any, fills them in. Where a ResourceQuota requires requests or
+limits on every container and no LimitRange provides them, the API server
+refuses such pods (`must specify limits.cpu for: copy-tools,stage-in`): set
+`CONQUEST_TASK_HELPER_RESOURCES` to JSON in the shape of a container's
+`resources`, e.g.
+`{"requests":{"cpu":"100m","memory":"128Mi"},"limits":{"cpu":"500m","memory":"256Mi"}}`
+(chart: `conquest.taskHelperResources`; the chart's `migrate` init container
+takes `conquest.migration.resources`, the objectfs CSI driver containers
+`objectfs.resources`). Conquest refuses to start if the value
+isn't valid (only `cpu`, `memory` and `ephemeral-storage` are accepted).
+
 ## Workspace Modes
 
 Controls how the runner pod and task pods share (or don't share) a filesystem.
@@ -461,6 +474,7 @@ No config files.
 | `CONQUEST_POD_SECURITY`             | `restricted`         | `restricted` or `baseline`        |
 | `CONQUEST_POD_RUN_AS_USER`          | `1000`               | UID for runner/task containers    |
 | `CONQUEST_POD_RUN_AS_GROUP`         | `1000`               | GID and fsGroup for those pods    |
+| `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Task init container resources     |
 | `CONQUEST_RECONCILER_INTERVAL`      | `5s`                 | How often reconcilers poll K8s    |
 | `CONQUEST_ASYNC_DISPATCH`           | `true`               | Submit TES tasks in the background |
 | `CONQUEST_DISPATCH_WORKERS`         | `8`                  | Task submissions in parallel      |
@@ -495,6 +509,16 @@ make docker-all             # Everything
 
 The Helm chart at `deploy/charts/conquest/` includes RBAC, init-container DB
 migrations, health probes, and a non-root security context.
+
+CI publishes the images of every push to `master`: to Docker Hub
+(`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository
+only) and to the GitHub Container Registry of the repository's owner
+(`ghcr.io/<owner>/*`, `.github/workflows/ghcr.yaml`, also in forks), tagged
+`sha-<short commit>`. The GHCR images (linux/amd64) are scanned with Trivy,
+signed with cosign (keyless) and carry build provenance attestations; pin
+them by digest (the chart's `tag` values take `sha-<short>@sha256:<digest>`).
+GHCR has `sha-*` tags only (no `latest` or version tags yet).
+The workflow's header shows how to verify them.
 
 ## Design Decisions
 

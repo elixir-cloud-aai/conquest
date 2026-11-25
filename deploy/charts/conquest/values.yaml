@@ -49,6 +49,17 @@ conquest:
     runAsUser: 1000
     runAsGroup: 1000       # also used as the pod fsGroup
 
+  # Resources of the helper init containers of task pods (copy-tools,
+  # stage-in), as for any container (requests, limits). Empty: none, so the
+  # namespace's LimitRange applies, if any. Set them where a ResourceQuota
+  # requires requests or limits on every container, e.g.
+  #   taskHelperResources:
+  #     requests: {cpu: 100m, memory: 128Mi}
+  #     limits: {cpu: 500m, memory: 256Mi}
+  # Executors get theirs from the TES request (CONQUEST_TASK_DEFAULT_* fill
+  # in what it leaves out).
+  taskHelperResources: {}
+
   # Optional per-version runner image overrides keyed by resolved Nextflow
   # version, e.g. {"25.04.3": "docker.io/anurag1201/conquest-nf-25.04.3-runner:v1.0.0"}.
   nextflowRunnerImages:
@@ -141,6 +152,9 @@ conquest:
       - "-database"
       - "$(DATABASE_URL)"
       - "up"
+    # Resources of the migrate init container (requests, limits). Empty: none,
+    # as for taskHelperResources above.
+    resources: {}
 
 # Secrets references — matches manually created resources in the cluster.
 secrets:
@@ -162,6 +176,8 @@ objectfs:
   csiS3Image: cr.yandex/crp9ftr22d26age3hulg/csi-s3:0.43.6
   csiProvisionerImage: cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-provisioner:v6.2.0
   csiRegistrarImage: cr.yandex/crp9ftr22d26age3hulg/yandex-cloud/csi-s3/csi-node-driver-registrar:v2.16.0
+  # Resources of each CSI driver container (requests, limits). Empty: none.
+  resources: {}
   # GeeseFS mount options (Talos-safe defaults).
   geesefs:
     memoryLimitMb: 1000
