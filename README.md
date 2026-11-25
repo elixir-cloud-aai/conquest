@@ -509,6 +509,14 @@ make docker-all             # Everything
 The Helm chart at `deploy/charts/conquest/` includes RBAC, init-container DB
 migrations, health probes, and a non-root security context.
 
+CI publishes the images of every push to `master`: to Docker Hub
+(`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository
+only) and to the GitHub Container Registry of the repository's owner
+(`ghcr.io/<owner>/*`, `.github/workflows/ghcr.yaml`, also in forks), tagged
+`sha-<short commit>`. The GHCR images (linux/amd64) are scanned with Trivy,
+signed with cosign (keyless) and carry build provenance attestations; pin
+them by digest. The workflow's header shows how to verify them.
+
 ## Design Decisions
 
 - **WES** as the external API, **TES** as the internal execution contract
