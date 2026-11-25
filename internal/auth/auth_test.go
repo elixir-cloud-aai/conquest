@@ -147,7 +147,9 @@ func (i *testIdP) sign(t *testing.T, claims jwt.MapClaims, edit ...func(*jwt.Tok
 	if tok.Method == jwt.SigningMethodNone {
 		key = jwt.UnsafeAllowNoneSignatureType
 	}
-	s, err := tok.SignedString(key)
+	// The HMAC key is a test fixture for the refusal of symmetric tokens,
+	// not a credential.
+	s, err := tok.SignedString(key) // nosemgrep: go.jwt-go.security.jwt.hardcoded-jwt-key
 	if err != nil {
 		t.Fatal(err)
 	}
