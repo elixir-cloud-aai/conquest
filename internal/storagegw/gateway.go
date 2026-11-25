@@ -247,6 +247,18 @@ func (g *Gateway) list(w http.ResponseWriter, r *http.Request, taskID string, s 
 		http.Error(w, "listing failed", http.StatusBadGateway)
 		return
 	}
+	// Keys with "." or ".." segments can't be served (parsePath refuses
+	// them), and a filer joining them to a local path would leave its
+	// directory: leave them out.
+	listed := keys[:0]
+	for _, k := range keys {
+		if hasDotSegment(k) {
+			g.log.Warn("storage gateway: listing skips key with dot segments", "task_id", taskID, "bucket", bucket, "key", k)
+			continue
+		}
+		listed = append(listed, k)
+	}
+	keys = listed
 	if len(keys) > MaxListKeys {
 		g.log.Warn("storage gateway: listing too long", "task_id", taskID, "bucket", bucket, "prefix", prefix, "keys", len(keys))
 		http.Error(w, fmt.Sprintf("more than %d keys", MaxListKeys), http.StatusRequestEntityTooLarge)

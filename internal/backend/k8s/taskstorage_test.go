@@ -28,7 +28,7 @@ func TestBuildJobSpec_TaskPodsGetS3CredentialsByDefault(t *testing.T) {
 	pod := job.Spec.Template.Spec
 	for _, c := range []corev1.Container{pod.InitContainers[1], pod.Containers[0]} {
 		env := storageEnvOf(c)
-		if env["AWS_SECRET_ACCESS_KEY"].ValueFrom == nil || env["CONQUEST_S3_ENDPOINT"].Value != "http://minio:9000" {
+		if env["AWS_ACCESS_KEY_ID"].ValueFrom == nil || env["AWS_SECRET_ACCESS_KEY"].ValueFrom == nil || env["CONQUEST_S3_ENDPOINT"].Value != "http://minio:9000" {
 			t.Errorf("%s: storage env = %v", c.Name, env)
 		}
 		if _, ok := env[isolation.EnvTaskStorageURL]; ok {

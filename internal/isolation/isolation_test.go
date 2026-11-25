@@ -373,3 +373,31 @@ func TestClientErrors(t *testing.T) {
 		t.Error("ListPrefix refused: want an error")
 	}
 }
+
+// A replica without isolation (rollout) answers 404; that is retried.
+func TestGateway404IsRetried(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/storage/") {
+			calls++
+			if calls == 1 {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Location", "/s3/b/k")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+		_, _ = io.WriteString(w, "data")
+	}))
+	defer srv.Close()
+
+	rc, err := fastClient(srv.URL+"/storage/v1/t/t1/sig").Get(context.Background(), "b", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.Close()
+	if calls != 2 {
+		t.Errorf("gateway calls = %d", calls)
+	}
+}

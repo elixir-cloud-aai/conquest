@@ -19,7 +19,8 @@ import (
 // it asks the storage gateway for a presigned URL per object, then reads or
 // writes there. Delete is not offered.
 //
-// Connection errors and 429/5xx answers of the gateway or S3 are retried with
+// Connection errors, 429/5xx answers of the gateway or S3, and 404s of the
+// gateway (a replica without isolation during a rollout) are retried with
 // backoff (about a minute in all), so a restart of Conquest doesn't fail
 // tasks; uploads only if their reader can seek back.
 type Client struct {
@@ -151,7 +152,8 @@ func (c *Client) presignedOnce(ctx context.Context, method, bucket, key string, 
 	if resp.StatusCode != http.StatusTemporaryRedirect {
 		defer resp.Body.Close()
 		err := statusError(strings.ToLower(method), bucket, key, resp)
-		if retryableStatus(resp.StatusCode) {
+		// 404 too: during a rollout, a replica without isolation may answer
+		if retryableStatus(resp.StatusCode) || resp.StatusCode == http.StatusNotFound {
 			return nil, &retryableError{err}
 		}
 		return nil, err

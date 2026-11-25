@@ -185,3 +185,20 @@ func TestListTooLong(t *testing.T) {
 		t.Errorf("status = %d, want 413", rec.Code)
 	}
 }
+
+func TestListSkipsDotSegments(t *testing.T) {
+	gw, _, h := newGateway(t, activeTask())
+	gw.SetLister(&lister{keys: []string{"run/bundle/a", "run/bundle/../../../tools/conquest", "run/bundle/./b"}})
+
+	rec := do(t, h, http.MethodGet, gw.URL("t1", "conquest", "run/bundle/"))
+
+	var got struct {
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Keys, []string{"run/bundle/a"}) {
+		t.Errorf("keys = %v", got.Keys)
+	}
+}
