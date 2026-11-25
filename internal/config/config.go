@@ -110,6 +110,11 @@ type Config struct {
 	// S3PublicEndpoint is the S3 endpoint as remote endpoints reach it, used
 	// in the gateway's presigned URLs. Default: S3Endpoint.
 	S3PublicEndpoint string
+	// StorageIsolation gives local task pods no S3 credentials: they reach
+	// their objects through the storage gateway, and every task is bounded
+	// to its run's root (see internal/isolation). Needs
+	// StorageGatewaySecret.
+	StorageIsolation bool
 }
 
 // defaultTaskMinRAMGb floors task memory at 128 MiB. Workflows compute memory
@@ -171,6 +176,7 @@ func Load() (*Config, error) {
 		StorageGatewayURL:             strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_GATEWAY_URL")),
 		StorageGatewaySecret:          os.Getenv("CONQUEST_STORAGE_GATEWAY_SECRET"),
 		S3PublicEndpoint:              strings.TrimSpace(os.Getenv("CONQUEST_S3_PUBLIC_ENDPOINT")),
+		StorageIsolation:              envBoolOr("CONQUEST_STORAGE_ISOLATION", false),
 		K8sNamespace:                  envOr("CONQUEST_K8S_NAMESPACE", "conquest"),
 		LayoutVersion:                 envOr("CONQUEST_LAYOUT_VERSION", storage.LayoutVersion),
 		PageSizeMax:                   envIntOr("CONQUEST_PAGE_SIZE_MAX", 256),
@@ -254,6 +260,20 @@ func Load() (*Config, error) {
 	}
 	if c.RunnerEphemeralStorageLimit == "" {
 		return nil, fmt.Errorf("CONQUEST_RUNNER_EPHEMERAL_STORAGE_LIMIT is required")
+	}
+
+	if v := strings.TrimSpace(os.Getenv("CONQUEST_STORAGE_ISOLATION")); v != "" {
+		if _, err := strconv.ParseBool(v); err != nil {
+			return nil, fmt.Errorf("CONQUEST_STORAGE_ISOLATION must be true or false, got %q", v)
+		}
+	}
+	if c.StorageIsolation {
+		if len(c.StorageGatewaySecret) < 32 {
+			return nil, fmt.Errorf("CONQUEST_STORAGE_ISOLATION needs CONQUEST_STORAGE_GATEWAY_SECRET (at least 32 bytes)")
+		}
+		if c.S3Endpoint == "" {
+			return nil, fmt.Errorf("CONQUEST_STORAGE_ISOLATION needs CONQUEST_S3_ENDPOINT")
+		}
 	}
 
 	// Pod security validation.

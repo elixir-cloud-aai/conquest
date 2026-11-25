@@ -239,6 +239,64 @@ the upstream Pod Security Admission checks.
 
 [pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
 
+## Storage Isolation
+
+By default every task pod gets the bucket-wide S3 credentials: its stage-in
+container and the filer that uploads outputs after the executor need them,
+and the executor (the user's image and command) can read them too. Any task,
+and so anyone who may submit a run, can then read and write every run's
+objects.
+
+With `CONQUEST_STORAGE_ISOLATION=true` (chart: `storageIsolation.enabled`),
+task pods get no S3 credentials and no S3 endpoint. Each gets one capability
+URL of the [storage gateway](#federation-remote-tes-endpoints), on Conquest's
+in-cluster address, in `CONQUEST_TASK_STORAGE_URL`:
+
+```
+<CONQUEST_INTERNAL_BASE_URL>/storage/v1/t/<task ID>/<HMAC>
+```
+
+The executor (the user's code) can read this URL too; it reaches only what
+the task itself may. The filer reads `<that URL>/<bucket>/<key>` and follows the `307` to an S3 URL
+presigned for that object and method; a `GET` of a prefix URL (ending in `/`)
+below a `DIRECTORY` input lists the keys there. What a task may reach is
+decided from its stored TES request as for remote endpoints, and is bounded to
+its run's root, `s3://<bucket>/<layout version>/workflow-runs/<run ID>/`: a
+request that names another run's objects gets `403`. The bound applies to the
+tasks of remote endpoints with `s3_url_style: gateway` as well (endpoints with
+their own access to the bucket are not bounded). URLs stop working shortly
+after the task ends.
+
+- Needs `CONQUEST_STORAGE_GATEWAY_SECRET` (the chart reuses
+  `storageGateway.existingSecret` or generates one) and the server's own S3
+  credentials; `CONQUEST_STORAGE_GATEWAY_URL` is needed only for remote
+  endpoints.
+- Task pods must reach Conquest's Service at `CONQUEST_INTERNAL_BASE_URL`
+  (the chart sets it; its built-in default fits only the `services`
+  namespace) and the presign endpoint: `CONQUEST_S3_PUBLIC_ENDPOINT` if set,
+  else `CONQUEST_S3_ENDPOINT`.
+- `s3://` inputs and outputs must lie below the run's root. Inputs elsewhere
+  in the bucket (e.g. shared reference data) are refused; standalone TES
+  tasks without a `conquest_run_id` tag reach only their own stub run's
+  prefix. Listings answer at most 100000 keys (`413` beyond).
+- The bound is only as strong as the task's run ID, which comes from the
+  caller: the runner callback API (`/internal/runs/<run ID>/...`) and the
+  `conquest_run_id` tag on the public TES API attach a task to any run,
+  unauthenticated, so isolation holds only where callers that can reach
+  those APIs are trusted, until they are authenticated and checked for the
+  run's owner.
+- The bound uses the current `CONQUEST_LAYOUT_VERSION`: drain runs before
+  changing it.
+- Task staging depends on Conquest being up: the filer retries connection
+  errors and `429`/`5xx` for about a minute, so a restart or a rolling
+  upgrade is fine, a longer outage fails the tasks that stage meanwhile.
+- Uploads are single presigned `PUT`s, so S3's limit for one `PUT` applies to
+  each output file (5 GiB on AWS and Ceph RGW by default).
+- Not covered: runner pods. The engines read and write the run's work
+  directory with their own S3 clients, so the runner still gets the
+  credentials, and workflow code that runs there (Nextflow scripts, Snakefiles)
+  can read them.
+
 ## GA4GH APIs
 
 Conquest implements both GA4GH v1.1 specifications.
@@ -448,7 +506,8 @@ can't list. Remote sites then need only to reach the gateway and the
 presigned S3 endpoint (`storageGateway.s3PublicEndpoint`), and must follow
 `307` on PUT: Funnel (since #1472), tesk-core (since #61) and Poiesis (since
 #103) do. The gateway works over plain HTTP, but the URLs are bearer
-capabilities: use HTTPS outside trusted networks.
+capabilities: use HTTPS outside trusted networks. Conquest's own task pods
+can use the gateway too (see [Storage Isolation](#storage-isolation)).
 
 **Requirements on remote sites** (none of these can be expressed in TES):
 
@@ -558,6 +617,11 @@ migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" up
 go test -tags integration ./internal/repository/pg/
 ```
 
+The storage isolation tests (`internal/isolation`, same build tag) need an S3
+server that checks signatures and skip without `CONQUEST_TEST_S3_ENDPOINT`;
+CI runs them against SeaweedFS in the `Storage integration test` job (see the
+comment at the top of `internal/isolation/s3_integration_test.go`).
+
 ## Configuration
 
 All settings come from environment variables with the `CONQUEST_` prefix.
@@ -581,6 +645,8 @@ No config files.
 | `CONQUEST_POD_RUN_AS_USER`          | `1000`               | UID for runner/task containers    |
 | `CONQUEST_POD_RUN_AS_GROUP`         | `1000`               | GID and fsGroup for those pods    |
 | `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Task init container resources     |
+| `CONQUEST_STORAGE_ISOLATION`        | `false`              | No S3 credentials in task pods (see Storage Isolation) |
+| `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RECONCILER_INTERVAL`      | `5s`                 | How often reconcilers poll K8s    |
 | `CONQUEST_ASYNC_DISPATCH`           | `true`               | Submit TES tasks in the background |
 | `CONQUEST_DISPATCH_WORKERS`         | `8`                  | Task submissions in parallel      |
