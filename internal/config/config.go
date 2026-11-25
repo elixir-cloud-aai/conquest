@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anuragxxd/conquest/internal/runnerauth"
 	"github.com/anuragxxd/conquest/internal/storage"
 )
 
@@ -283,8 +284,8 @@ func Load() (*Config, error) {
 		}
 	}
 
-	if c.RunnerSecret != "" && len(c.RunnerSecret) < 32 {
-		return nil, fmt.Errorf("CONQUEST_RUNNER_SECRET must be at least 32 bytes")
+	if c.RunnerSecret != "" && len(c.RunnerSecret) < runnerauth.MinSecretBytes {
+		return nil, fmt.Errorf("CONQUEST_RUNNER_SECRET must be at least %d bytes", runnerauth.MinSecretBytes)
 	}
 	if c.AuthEnabled && c.RunnerSecret == "" {
 		return nil, fmt.Errorf("CONQUEST_AUTH_ENABLED needs CONQUEST_RUNNER_SECRET: without it, the runner callback API reaches every run unauthenticated")

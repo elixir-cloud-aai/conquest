@@ -17,6 +17,7 @@ import (
 	wdlengine "github.com/anuragxxd/conquest/internal/engine/wdl"
 	"github.com/anuragxxd/conquest/internal/repository"
 	"github.com/anuragxxd/conquest/internal/repository/pg"
+	"github.com/anuragxxd/conquest/internal/runnerauth"
 	"github.com/anuragxxd/conquest/internal/taskpolicy"
 )
 
@@ -98,6 +99,20 @@ func (h *Handler) InternalRoutes(r chi.Router) {
 // of the internal routes; it sees the chi URL parameter "run_id". Without
 // it the internal routes are open.
 func (h *Handler) SetRunnerAuth(authn func(http.Handler) http.Handler) { h.runnerAuth = authn }
+
+// RunLookup tells runnerauth whether a run is terminal, from runs.
+func RunLookup(runs repository.RunStore) runnerauth.RunLookup {
+	return func(ctx context.Context, runID string) (bool, error) {
+		run, err := runs.Get(ctx, runID)
+		if errors.Is(err, pg.ErrNotFound) {
+			return false, runnerauth.ErrRunNotFound
+		}
+		if err != nil {
+			return false, err
+		}
+		return run.State.IsTerminal(), nil
+	}
+}
 
 func (h *Handler) GetServiceInfo(w http.ResponseWriter, r *http.Request) {
 	info := ServiceInfo{

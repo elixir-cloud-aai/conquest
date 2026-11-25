@@ -784,8 +784,9 @@ migrations, health probes, and a non-root security context.
 
 ### Securing a deployment with the chart
 
-Token authentication and storage isolation are off by default; turn them on for any deployment
-that others can reach.
+Token authentication and storage isolation are off by default; turn them
+on for any deployment that others can reach. Runner callbacks are always
+authenticated.
 
 - **Token authentication** (see Authentication): `auth.enabled: true` sets
   `CONQUEST_AUTH_ENABLED`, `auth.serviceInfoPublic` (default `true`) sets
@@ -799,7 +800,10 @@ that others can reach.
 - **Runner callbacks** (see Runner callbacks): always authenticated. The
   chart generates the Secret `<fullname>-runner` (default `conquest-runner`, key
   `runner-secret`) once and keeps it across upgrades, or uses
-  `runner.existingSecret` (same key, at least 32 bytes).
+  `runner.existingSecret` (same key, at least 32 bytes). Where the chart is
+  rendered without cluster access (`helm template`, Argo CD, `--dry-run`),
+  every render generates a new secret, which fails the active runs: set
+  `runner.existingSecret` there.
 - **Storage isolation** (see Storage Isolation): `storageIsolation.enabled:
   true` keeps S3 credentials out of task pods.
   Runner pods still get the bucket-wide S3 credentials (see Storage
@@ -830,8 +834,8 @@ storageIsolation:
 
 Upgrading: drain active runs before switching authentication on (see
 Authentication) and before the first upgrade to a chart with runner
-tokens (see Runner callbacks: runs started before fail), and set `conquest.strategy: {type: Recreate}` for that
-upgrade: with the default rolling update, old pods keep serving without
+tokens (see Runner callbacks: runs started before fail), and set
+`conquest.strategy: {type: Recreate}` for that upgrade: with the default rolling update, old pods keep serving without
 authentication (or without the new create rule) until they are replaced.
 
 CI publishes the images of every push to `master`: to Docker Hub

@@ -5,6 +5,7 @@
 package adapter
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -85,7 +86,7 @@ func GenerateNextflowConfig(cfg NextflowRunConfig) (*GeneratedConfig, error) {
 	config.WriteString("}\n")
 	config.WriteString(fmt.Sprintf("tes.endpoint = '%s'\n", tesEndpoint))
 	if cfg.RunnerToken != "" {
-		if !isHex(cfg.RunnerToken) {
+		if _, err := hex.DecodeString(cfg.RunnerToken); err != nil {
 			return nil, fmt.Errorf("runner token must be hex digits")
 		}
 		config.WriteString(fmt.Sprintf("tes.oauthToken = '%s'\n", cfg.RunnerToken))
@@ -195,15 +196,4 @@ func WriteConfigFiles(dir string, gen *GeneratedConfig) error {
 	}
 
 	return nil
-}
-
-// isHex reports whether s consists of hex digits only, so that it can be
-// written into a quoted config string as it is.
-func isHex(s string) bool {
-	for _, c := range s {
-		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
-			return false
-		}
-	}
-	return true
 }

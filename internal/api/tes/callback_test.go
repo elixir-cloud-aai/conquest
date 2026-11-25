@@ -50,16 +50,7 @@ func newCallbackFixture(t *testing.T, withAuth bool) *callbackFixture {
 	h := NewHandler(runs, tasks, memEvents{}, nil)
 	h.SetDispatcher(&notifier{})
 	if withAuth {
-		h.SetRunnerAuth(tokens.Middleware(func(ctx context.Context, runID string) (bool, error) {
-			run, err := runs.Get(ctx, runID)
-			if errors.Is(err, pg.ErrNotFound) {
-				return false, runnerauth.ErrRunNotFound
-			}
-			if err != nil {
-				return false, err
-			}
-			return run.State.IsTerminal(), nil
-		}))
+		h.SetRunnerAuth(tokens.Middleware(RunLookup(runs)))
 	}
 	r := chi.NewRouter()
 	h.Routes(r)
@@ -149,5 +140,26 @@ func TestPublicGetTaskUnaffected(t *testing.T) {
 	f := newCallbackFixture(t, true)
 	if w := f.do(http.MethodGet, "/ga4gh/tes/v1/tasks/task-b", ""); w.Code != 200 {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestRunLookup(t *testing.T) {
+	runs := &memRuns{runs: map[string]*domain.Run{
+		"active": {RunID: "active", State: domain.StateRunning},
+		"done":   {RunID: "done", State: domain.StateCanceled},
+	}}
+	lookup := RunLookup(runs)
+	if terminal, err := lookup(context.Background(), "active"); terminal || err != nil {
+		t.Fatalf("active: %v, %v", terminal, err)
+	}
+	if terminal, err := lookup(context.Background(), "done"); !terminal || err != nil {
+		t.Fatalf("done: %v, %v", terminal, err)
+	}
+	if _, err := lookup(context.Background(), "missing"); !errors.Is(err, runnerauth.ErrRunNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	runs.err = errors.New("db down")
+	if _, err := lookup(context.Background(), "active"); err == nil || errors.Is(err, runnerauth.ErrRunNotFound) {
+		t.Fatalf("store error: %v", err)
 	}
 }

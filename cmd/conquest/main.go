@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -337,16 +336,7 @@ func run(log *slog.Logger) error {
 	wesHandler := wes.NewHandler(runCtrl)
 	tesHandler := tes.NewHandler(runStore, taskStore, eventStore, tasks)
 	if runnerTokens != nil {
-		tesHandler.SetRunnerAuth(runnerTokens.Middleware(func(ctx context.Context, runID string) (bool, error) {
-			run, err := runStore.Get(ctx, runID)
-			if errors.Is(err, pg.ErrNotFound) {
-				return false, runnerauth.ErrRunNotFound
-			}
-			if err != nil {
-				return false, err
-			}
-			return run.State.IsTerminal(), nil
-		}))
+		tesHandler.SetRunnerAuth(runnerTokens.Middleware(tes.RunLookup(runStore)))
 	}
 	if gatewayID != "" {
 		tesHandler.SetGatewayID(gatewayID)

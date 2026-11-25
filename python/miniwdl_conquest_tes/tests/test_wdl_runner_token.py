@@ -19,5 +19,5 @@ def test_tes_client_carries_the_token(monkeypatch):
     monkeypatch.setenv("CONQUEST_RUNNER_TOKEN", "abc123")
     backend = plugin.ConquestTESContainer.__new__(plugin.ConquestTESContainer)
     backend._tes_client = None
-    plugin.ConquestTESContainer._tes_url = "http://conquest/internal/runs/r1/ga4gh/tes/v1"
+    monkeypatch.setattr(plugin.ConquestTESContainer, "_tes_url", "http://conquest/internal/runs/r1/ga4gh/tes/v1")
     assert backend.tes_client.token == "abc123"
