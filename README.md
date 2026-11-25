@@ -516,7 +516,8 @@ only) and to the GitHub Container Registry of the repository's owner
 (`ghcr.io/<owner>/*`, `.github/workflows/ghcr.yaml`, also in forks), tagged
 `sha-<short commit>`. The GHCR images (linux/amd64) are scanned with Trivy,
 signed with cosign (keyless) and carry build provenance attestations; pin
-them by digest. GHCR has `sha-*` tags only (no `latest` or version tags yet).
+them by digest (the chart's `tag` values take `sha-<short>@sha256:<digest>`).
+GHCR has `sha-*` tags only (no `latest` or version tags yet).
 The workflow's header shows how to verify them.
 
 ## Design Decisions
