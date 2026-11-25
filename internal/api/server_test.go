@@ -59,8 +59,8 @@ func TestNewRouterWithAuth_GuardsOnlyThePublicAPIs(t *testing.T) {
 	for _, path := range open {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
-		if w.Code == http.StatusUnauthorized {
-			t.Errorf("GET %s: guarded", path)
+		if w.Code == http.StatusUnauthorized || w.Code == http.StatusNotFound || w.Code == http.StatusMethodNotAllowed {
+			t.Errorf("GET %s: status %d, want an open route", path, w.Code)
 		}
 	}
 }

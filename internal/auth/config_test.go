@@ -54,7 +54,8 @@ func TestLoadConfig_Refused(t *testing.T) {
 		"alg none":            "issuers:\n  - url: https://a.example/\n    audiences: [web]\nalgorithms: [none]",
 		"negative skew":       "issuers:\n  - url: https://a.example/\n    audiences: [web]\nclock_skew_seconds: -1",
 		"zero timeout":        "issuers:\n  - url: https://a.example/\n    audiences: [web]\ntimeout_seconds: 0",
-		"long timeout":        "issuers:\n  - url: https://a.example/\n    audiences: [web]\ntimeout_seconds: 31",
+		"long timeout":        "issuers:\n  - url: https://a.example/\n    audiences: [web]\ntimeout_seconds: 11",
+		"pipe in issuer":      "issuers:\n  - url: https://a.example/x|y\n    audiences: [web]",
 	}
 	for name, body := range tests {
 		if _, err := LoadConfig(writeConfig(t, body)); err == nil {

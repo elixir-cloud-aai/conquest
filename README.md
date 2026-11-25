@@ -397,11 +397,13 @@ issuers:
       - client_id: <client ID>
 algorithms: [RS256, ES256]  # default
 clock_skew_seconds: 60      # default
-timeout_seconds: 10         # default, 1-30; discovery and key set requests
+timeout_seconds: 10         # default and maximum; discovery and key set requests
 ```
 
 Issuer and key set URLs must use https (plain http only to a loopback
-host). So far Conquest only authenticates callers; who may create runs (an
+host), also after redirects, and issuer URLs must not contain `|` (it
+separates issuer and subject in run owners). Tokens must carry `exp`,
+`iat` and `sub`. So far Conquest only authenticates callers; who may create runs (an
 entitlement check at submit) is not enforced yet, so any accepted caller can
 submit. The Helm chart can't switch authentication on yet (the environment
 variables and the config file mount come in a follow-up).

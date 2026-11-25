@@ -112,7 +112,7 @@ func New(ctx context.Context, cfg *Config, log *slog.Logger) (*Authenticator, er
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: cfg.timeout()}
+	client := &http.Client{Timeout: cfg.timeout(), CheckRedirect: checkRedirect}
 	a := &Authenticator{
 		issuers: make(map[string]*issuer, len(cfg.Issuers)),
 		parser: jwt.NewParser(
@@ -131,6 +131,16 @@ func New(ctx context.Context, cfg *Config, log *slog.Logger) (*Authenticator, er
 		a.issuers[ic.URL] = &issuer{cfg: ic, clients: clients, client: client, ctx: ctx, log: log}
 	}
 	return a, nil
+}
+
+// checkRedirect follows a redirect of a discovery or key set request
+// only to a URL that checkURL accepts, so an https endpoint can't hand
+// the keys over to plain http.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after 10 redirects")
+	}
+	return checkURL("redirect", req.URL.String())
 }
 
 // claims are the access token claims Conquest reads.
@@ -179,6 +189,9 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	}
 	if c.Subject == "" {
 		return nil, fmt.Errorf("token has no sub")
+	}
+	if c.IssuedAt == nil { // RFC 9068 requires iat; WithIssuedAt only checks it if present
+		return nil, fmt.Errorf("token has no iat")
 	}
 
 	p := &Principal{Issuer: c.Issuer, Subject: c.Subject, ClientID: c.ClientID, Scope: c.Scope}

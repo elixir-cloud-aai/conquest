@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoad_ParsesRunnerImageMapAndPullSecrets(t *testing.T) {
 	t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
@@ -225,7 +228,17 @@ func TestLoad_ReadsTaskHelperResources(t *testing.T) {
 	}
 }
 
+// clearAuthEnv unsets the auth settings for the test, so values exported
+// in the environment don't leak in.
+func clearAuthEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{"CONQUEST_AUTH_ENABLED", "CONQUEST_AUTH_SERVICE_INFO_PUBLIC", "CONQUEST_AUTH_CONFIG"} {
+		t.Setenv(key, "")
+	}
+}
+
 func TestLoad_AuthDefaults(t *testing.T) {
+	clearAuthEnv(t)
 	t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
 	t.Setenv("CONQUEST_S3_BUCKET", "conquest")
 
@@ -239,6 +252,7 @@ func TestLoad_AuthDefaults(t *testing.T) {
 }
 
 func TestLoad_AuthSettings(t *testing.T) {
+	clearAuthEnv(t)
 	t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
 	t.Setenv("CONQUEST_S3_BUCKET", "conquest")
 	t.Setenv("CONQUEST_AUTH_ENABLED", "true")
@@ -257,11 +271,12 @@ func TestLoad_AuthSettings(t *testing.T) {
 func TestLoad_RejectsInvalidAuthSwitch(t *testing.T) {
 	for _, key := range []string{"CONQUEST_AUTH_ENABLED", "CONQUEST_AUTH_SERVICE_INFO_PUBLIC"} {
 		t.Run(key, func(t *testing.T) {
+			clearAuthEnv(t)
 			t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
 			t.Setenv("CONQUEST_S3_BUCKET", "conquest")
 			t.Setenv(key, "ture")
-			if _, err := Load(); err == nil {
-				t.Fatal("expected error for invalid boolean")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("err = %v, want an error naming %s", err, key)
 			}
 		})
 	}

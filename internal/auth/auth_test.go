@@ -260,6 +260,7 @@ func TestAuthenticate_Refused(t *testing.T) {
 		{name: "typ missing", header: []func(*jwt.Token){func(tok *jwt.Token) { delete(tok.Header, "typ") }}, want: "is not at+jwt"},
 		{name: "expired", claims: []func(jwt.MapClaims){set("exp", now.Add(-2*time.Minute).Unix())}, want: "token is expired"},
 		{name: "no exp", claims: []func(jwt.MapClaims){del("exp")}, want: "exp claim is required"},
+		{name: "no iat", claims: []func(jwt.MapClaims){del("iat")}, want: "token has no iat"},
 		{name: "nbf in the future", claims: []func(jwt.MapClaims){set("nbf", now.Add(5*time.Minute).Unix())}, want: "not valid yet"},
 		{name: "iat in the future", claims: []func(jwt.MapClaims){set("iat", now.Add(5*time.Minute).Unix())}, want: "used before issued"},
 		{name: "no sub", claims: []func(jwt.MapClaims){del("sub")}, want: "no sub"},
@@ -543,5 +544,39 @@ func TestKeyfunc_PanicDoesNotStickResolving(t *testing.T) {
 	iss.mu.Unlock()
 	if resolving || !errors.Is(lastError, errUnavailable) {
 		t.Fatalf("after panic: resolving %v, last error %v", resolving, lastError)
+	}
+}
+
+func TestCheckRedirect(t *testing.T) {
+	req := func(u string) *http.Request { return httptest.NewRequest(http.MethodGet, u, nil) }
+	if err := checkRedirect(req("https://keys.example/jwks"), nil); err != nil {
+		t.Errorf("https redirect refused: %v", err)
+	}
+	if err := checkRedirect(req("http://127.0.0.1:8080/jwks"), nil); err != nil {
+		t.Errorf("loopback http redirect refused: %v", err)
+	}
+	if err := checkRedirect(req("http://keys.example/jwks"), nil); err == nil {
+		t.Error("redirect to plain http accepted")
+	}
+	if err := checkRedirect(req("https://keys.example/jwks"), make([]*http.Request, 10)); err == nil {
+		t.Error("eleventh redirect accepted")
+	}
+}
+
+func TestAuthenticate_KeySetRedirectToHTTPIsRefused(t *testing.T) {
+	idp := newTestIdP(t)
+	var hits int
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.Redirect(w, r, "http://keys.example.invalid/jwks", http.StatusFound)
+	}))
+	t.Cleanup(plain.Close)
+	a := newTestAuthenticator(t, idp, func(c *Config) { c.Issuers[0].JWKSURI = plain.URL + "/jwks" })
+	_, err := a.Authenticate(request(idp.sign(t, idp.claimsFor("alice@ls"))))
+	if !errors.Is(err, errUnavailable) || !strings.Contains(err.Error(), "must use https") {
+		t.Fatalf("err = %v, want errUnavailable from the refused redirect", err)
+	}
+	if hits == 0 {
+		t.Fatal("key set never requested")
 	}
 }

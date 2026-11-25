@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"sigs.k8s.io/yaml"
@@ -21,7 +22,7 @@ type Config struct {
 	// ClockSkewSeconds is the leeway for exp, nbf and iat (default 60).
 	ClockSkewSeconds *int `json:"clock_skew_seconds,omitempty"`
 	// TimeoutSeconds bounds each request to an issuer: discovery and key
-	// set fetches (default 10, at most 30).
+	// set fetches (default 10, at most 10).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
@@ -81,6 +82,10 @@ func (c *Config) Validate() error {
 		if err := checkURL("issuer url", iss.URL); err != nil {
 			return err
 		}
+		if strings.Contains(iss.URL, "|") {
+			// "|" separates issuer and subject in owner IDs.
+			return fmt.Errorf("issuer %q: url must not contain |", iss.URL)
+		}
 		if seen[iss.URL] {
 			return fmt.Errorf("issuer %q configured twice", iss.URL)
 		}
@@ -128,10 +133,13 @@ func (c *Config) Validate() error {
 		timeout := 10
 		c.TimeoutSeconds = &timeout
 	}
-	// The cap keeps the unknown-kid wait below the refetch interval (one
-	// minute), so lookups fail at once while the refetch slot is used up.
-	if *c.TimeoutSeconds <= 0 || *c.TimeoutSeconds > 30 {
-		return fmt.Errorf("timeout_seconds must be between 1 and 30")
+	// A request may wait for two issuer requests in a row (discovery and
+	// key set, or the unknown-kid wait and the refetch). The cap keeps
+	// that well below the server's 30 s write timeout, so the 503 still
+	// reaches the caller, and below the one-minute refetch interval, so
+	// lookups fail at once while the refetch slot is used up.
+	if *c.TimeoutSeconds <= 0 || *c.TimeoutSeconds > 10 {
+		return fmt.Errorf("timeout_seconds must be between 1 and 10")
 	}
 	return nil
 }
