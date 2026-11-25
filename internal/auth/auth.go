@@ -19,6 +19,9 @@
 //
 // A token whose sub equals a listed client ID without being that client's
 // own token is refused. The caller's owner identity is "<iss>|<sub>".
+//
+// Requests that create runs or tasks (Authenticator.Create) also need the
+// caller to be entitled to create (create.go).
 package auth
 
 import (
@@ -85,6 +88,12 @@ type Authenticator struct {
 	// Public reports requests that need no token (e.g. service-info); nil:
 	// every request needs one.
 	Public func(*http.Request) bool
+	// Create reports requests that create runs or tasks: the caller must
+	// also be entitled to create (create.go). nil: no request creates.
+	Create func(*http.Request) bool
+
+	entitlements     map[string]bool
+	entitlementClaim string
 }
 
 // issuer holds one configured issuer and, once resolved, its key set.
@@ -95,11 +104,16 @@ type issuer struct {
 	ctx     context.Context
 	log     *slog.Logger
 
-	mu        sync.Mutex
-	keys      keyfunc.Keyfunc
-	resolving bool
-	lastTry   time.Time
-	lastError error
+	// needUserinfo: creates ask the userinfo endpoint, so it is
+	// discovered unless configured.
+	needUserinfo bool
+
+	mu          sync.Mutex
+	keys        keyfunc.Keyfunc
+	userinfoURI string // configured or discovered; set with keys
+	resolving   bool
+	lastTry     time.Time
+	lastError   error
 }
 
 // discoveryRetry is how long a failed discovery is not retried.
@@ -121,14 +135,22 @@ func New(ctx context.Context, cfg *Config, log *slog.Logger) (*Authenticator, er
 			jwt.WithExpirationRequired(),
 			jwt.WithIssuedAt(),
 		),
-		log: log,
+		log:              log,
+		entitlements:     make(map[string]bool, len(cfg.Create.Entitlements)),
+		entitlementClaim: cfg.Create.EntitlementClaim,
+	}
+	for _, e := range cfg.Create.Entitlements {
+		a.entitlements[e] = true
 	}
 	for _, ic := range cfg.Issuers {
 		clients := make(map[string]bool, len(ic.ServiceClients))
 		for _, sc := range ic.ServiceClients {
 			clients[sc.ClientID] = true
 		}
-		a.issuers[ic.URL] = &issuer{cfg: ic, clients: clients, client: client, ctx: ctx, log: log}
+		a.issuers[ic.URL] = &issuer{
+			cfg: ic, clients: clients, client: client, ctx: ctx, log: log,
+			needUserinfo: len(cfg.Create.Entitlements) > 0,
+		}
 	}
 	return a, nil
 }
@@ -212,8 +234,8 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	return p, nil
 }
 
-// Middleware rejects requests without a valid bearer token and scopes the
-// others to their caller.
+// Middleware rejects requests without a valid bearer token, and creates
+// by callers not entitled to create, and scopes the others to their caller.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.Public != nil && a.Public(r) {
@@ -221,25 +243,35 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		p, err := a.Authenticate(r)
+		if err == nil && a.Create != nil && a.Create(r) {
+			err = a.authorizeCreate(r, p)
+		}
 		if err != nil {
-			// The cause goes to the log, never the token.
-			a.log.Info("request not authenticated", "method", r.Method, "path", r.URL.Path, "err", err)
-			if errors.Is(err, errUnavailable) {
-				writeError(w, http.StatusServiceUnavailable, "token validation temporarily unavailable")
-				return
-			}
-			if errors.Is(err, errNoToken) {
-				w.Header().Set("WWW-Authenticate", `Bearer`)
-			} else {
-				w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-			}
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+			a.refuse(w, r, err)
 			return
 		}
 		ctx := context.WithValue(r.Context(), principalKey{}, p)
 		ctx = ownership.NewContext(ctx, ownership.Owner{ID: p.Owner(), Context: p.authContext()})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// refuse answers a request that failed authentication or the submit rule.
+func (a *Authenticator) refuse(w http.ResponseWriter, r *http.Request, err error) {
+	// The cause goes to the log, never the token.
+	a.log.Info("request refused", "method", r.Method, "path", r.URL.Path, "err", err)
+	switch {
+	case errors.Is(err, errUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "token validation temporarily unavailable")
+	case errors.Is(err, errForbidden):
+		writeError(w, http.StatusForbidden, "forbidden")
+	case errors.Is(err, errNoToken):
+		w.Header().Set("WWW-Authenticate", `Bearer`)
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	default:
+		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	}
 }
 
 var errNoToken = errors.New("no bearer token")
@@ -312,6 +344,7 @@ func (i *issuer) keyfunc() (keys keyfunc.Keyfunc, err error) {
 	// The state is updated however resolve ends, a panic included, so
 	// that a failed attempt never leaves the issuer "being fetched".
 	err = errResolvePanicked
+	var userinfoURI string
 	defer func() {
 		i.mu.Lock()
 		defer i.mu.Unlock()
@@ -322,16 +355,17 @@ func (i *issuer) keyfunc() (keys keyfunc.Keyfunc, err error) {
 			keys, err = nil, i.lastError
 			return
 		}
-		i.keys = keys
+		i.keys, i.userinfoURI = keys, userinfoURI
 	}()
-	keys, err = i.resolve()
+	keys, userinfoURI, err = i.resolve()
 	return keys, err
 }
 
 var errResolvePanicked = errors.New("key set resolution panicked")
 
-// resolve discovers the issuer's key set (unless configured) and fetches it.
-func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
+// resolve discovers the issuer's key set and, if needed, userinfo endpoint
+// (unless configured) and fetches the key set.
+func (i *issuer) resolve() (keyfunc.Keyfunc, string, error) {
 	// The key set's background refresh runs on ctx: an attempt that fails
 	// stops it, so failed attempts leave no goroutines behind.
 	ctx, cancel := context.WithCancel(i.ctx)
@@ -342,11 +376,24 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
 		}
 	}()
 
-	jwksURI := i.cfg.JWKSURI
-	if jwksURI == "" {
-		var err error
-		if jwksURI, err = i.discover(ctx); err != nil {
-			return nil, err
+	jwksURI, userinfoURI := i.cfg.JWKSURI, i.cfg.UserinfoURI
+	if jwksURI == "" || (i.needUserinfo && userinfoURI == "") {
+		doc, err := i.discover(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		if jwksURI == "" {
+			if err := checkURL("discovered jwks_uri", doc.JWKSURI); err != nil {
+				return nil, "", err
+			}
+			jwksURI = doc.JWKSURI
+		}
+		// A missing userinfo_endpoint fails creates only (503), not reads.
+		if i.needUserinfo && userinfoURI == "" && doc.UserinfoEndpoint != "" {
+			if err := checkURL("discovered userinfo_endpoint", doc.UserinfoEndpoint); err != nil {
+				return nil, "", err
+			}
+			userinfoURI = doc.UserinfoEndpoint
 		}
 	}
 	failFirst := false // a key set that can't be fetched is an error, retried later
@@ -367,7 +414,7 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("key set: %w", err)
+		return nil, "", fmt.Errorf("key set: %w", err)
 	}
 	// Only signing keys (or keys that don't say) verify tokens.
 	kf, err := keyfunc.New(keyfunc.Options{
@@ -376,42 +423,44 @@ func (i *issuer) resolve() (keyfunc.Keyfunc, error) {
 		UseWhitelist: []jwkset.USE{jwkset.UseSig, ""},
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	ok = true
-	return kf, nil
+	return kf, userinfoURI, nil
 }
 
-// discover reads jwks_uri from the issuer's OpenID Connect discovery
-// document, which must name the configured issuer exactly.
-func (i *issuer) discover(ctx context.Context) (string, error) {
+// discoveryDoc is the part of an OpenID Connect discovery document that
+// Conquest reads.
+type discoveryDoc struct {
+	Issuer           string `json:"issuer"`
+	JWKSURI          string `json:"jwks_uri"`
+	UserinfoEndpoint string `json:"userinfo_endpoint"`
+}
+
+// discover reads the issuer's OpenID Connect discovery document, which
+// must name the configured issuer exactly.
+func (i *issuer) discover(ctx context.Context) (*discoveryDoc, error) {
 	u := strings.TrimSuffix(i.cfg.URL, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := i.client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("discovery: %s", resp.Status)
+		return nil, fmt.Errorf("discovery: %s", resp.Status)
 	}
-	var doc struct {
-		Issuer  string `json:"issuer"`
-		JWKSURI string `json:"jwks_uri"`
-	}
+	var doc discoveryDoc
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&doc); err != nil {
-		return "", fmt.Errorf("discovery: %w", err)
+		return nil, fmt.Errorf("discovery: %w", err)
 	}
 	if doc.Issuer != i.cfg.URL {
-		return "", fmt.Errorf("discovery names issuer %q", doc.Issuer)
+		return nil, fmt.Errorf("discovery names issuer %q", doc.Issuer)
 	}
-	if err := checkURL("discovered jwks_uri", doc.JWKSURI); err != nil {
-		return "", err
-	}
-	return doc.JWKSURI, nil
+	return &doc, nil
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

@@ -36,9 +36,33 @@ issuers:
 	if cfg.Issuers[0].ServiceClients[0].ClientID != "svc" {
 		t.Errorf("service clients = %+v", cfg.Issuers[0].ServiceClients)
 	}
+	if cfg.Create.EntitlementClaim != "eduperson_entitlement" || len(cfg.Create.Entitlements) != 0 {
+		t.Errorf("create = %+v", cfg.Create)
+	}
+}
+
+func TestLoadConfig_Create(t *testing.T) {
+	cfg, err := LoadConfig(writeConfig(t, `
+issuers:
+  - url: https://login.example.org/oidc/
+    userinfo_uri: https://login.example.org/oidc/userinfo
+    audiences: [web]
+create:
+  entitlements: ["urn:example:group:compute#a", "urn:example:group:compute#b"]
+  entitlement_claim: groups
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.Create.Entitlements, ",") != "urn:example:group:compute#a,urn:example:group:compute#b" ||
+		cfg.Create.EntitlementClaim != "groups" || cfg.Issuers[0].UserinfoURI != "https://login.example.org/oidc/userinfo" {
+		t.Errorf("config = %+v", cfg)
+	}
 }
 
 func TestLoadConfig_Refused(t *testing.T) {
+	// Each body is valid but for the named problem.
+	const create = "\ncreate:\n  entitlements: [e]"
 	tests := map[string]string{
 		"no issuers":          `issuers: []`,
 		"unknown key":         "issuers:\n  - url: https://a.example/\n    audiences: [web]\n    audience: [typo]",
@@ -56,11 +80,26 @@ func TestLoadConfig_Refused(t *testing.T) {
 		"zero timeout":        "issuers:\n  - url: https://a.example/\n    audiences: [web]\ntimeout_seconds: 0",
 		"long timeout":        "issuers:\n  - url: https://a.example/\n    audiences: [web]\ntimeout_seconds: 11",
 		"pipe in issuer":      "issuers:\n  - url: https://a.example/x|y\n    audiences: [web]",
+		"http userinfo_uri":   "issuers:\n  - url: https://a.example/\n    userinfo_uri: http://a.example/userinfo\n    audiences: [web]",
 	}
 	for name, body := range tests {
+		if _, err := LoadConfig(writeConfig(t, body+create)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	for name, body := range map[string]string{
+		"nobody could create":   "issuers:\n  - url: https://a.example/\n    audiences: [web]",
+		"empty entitlement":     "issuers:\n  - url: https://a.example/\n    audiences: [web]\ncreate:\n  entitlements: ['']",
+		"duplicate entitlement": "issuers:\n  - url: https://a.example/\n    audiences: [web]\ncreate:\n  entitlements: [e, e]",
+		"unknown create key":    "issuers:\n  - url: https://a.example/\n    audiences: [web]\ncreate:\n  entitlements: [e]\n  entitlement: [typo]",
+	} {
 		if _, err := LoadConfig(writeConfig(t, body)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// Service clients alone are enough.
+	if _, err := LoadConfig(writeConfig(t, "issuers:\n  - url: https://a.example/\n    audiences: [web]\n    service_clients: [{client_id: s}]")); err != nil {
+		t.Errorf("service clients only: %v", err)
 	}
 	if _, err := LoadConfig(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
 		t.Error("missing file accepted")
@@ -69,7 +108,8 @@ func TestLoadConfig_Refused(t *testing.T) {
 
 func TestLoadConfig_LoopbackHTTPAllowed(t *testing.T) {
 	for _, u := range []string{"http://localhost:8080/", "http://127.0.0.1:9000/", "http://[::1]:9000/"} {
-		if _, err := LoadConfig(writeConfig(t, "issuers:\n  - url: "+u+"\n    audiences: [web]")); err != nil {
+		body := "issuers:\n  - url: " + u + "\n    userinfo_uri: " + u + "userinfo\n    audiences: [web]\ncreate:\n  entitlements: [e]"
+		if _, err := LoadConfig(writeConfig(t, body)); err != nil {
 			t.Errorf("%s: %v", u, err)
 		}
 	}

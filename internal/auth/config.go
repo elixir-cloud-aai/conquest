@@ -22,8 +22,10 @@ type Config struct {
 	// ClockSkewSeconds is the leeway for exp, nbf and iat (default 60).
 	ClockSkewSeconds *int `json:"clock_skew_seconds,omitempty"`
 	// TimeoutSeconds bounds each request to an issuer: discovery and key
-	// set fetches (default 10, at most 10).
+	// set fetches, userinfo requests (default 10, at most 10).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// Create is who may create runs and tasks.
+	Create CreateConfig `json:"create,omitempty"`
 }
 
 // IssuerConfig is one trusted token issuer.
@@ -33,6 +35,9 @@ type IssuerConfig struct {
 	// JWKSURI is the issuer's key set. Empty: taken from the issuer's
 	// OpenID Connect discovery document.
 	JWKSURI string `json:"jwks_uri,omitempty"`
+	// UserinfoURI is the issuer's userinfo endpoint, asked for a user's
+	// entitlements on create. Empty: taken from the discovery document.
+	UserinfoURI string `json:"userinfo_uri,omitempty"`
 	// Audiences are the client IDs of the front ends whose user tokens
 	// are accepted: a user token's aud must contain one of them.
 	Audiences []string `json:"audiences"`
@@ -77,6 +82,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("no issuers configured")
 	}
 	seen := map[string]bool{}
+	anyServiceClient := false
 	for i := range c.Issuers {
 		iss := &c.Issuers[i]
 		if err := checkURL("issuer url", iss.URL); err != nil {
@@ -92,6 +98,11 @@ func (c *Config) Validate() error {
 		seen[iss.URL] = true
 		if iss.JWKSURI != "" {
 			if err := checkURL("jwks_uri of issuer "+iss.URL, iss.JWKSURI); err != nil {
+				return err
+			}
+		}
+		if iss.UserinfoURI != "" {
+			if err := checkURL("userinfo_uri of issuer "+iss.URL, iss.UserinfoURI); err != nil {
 				return err
 			}
 		}
@@ -112,7 +123,11 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("issuer %q: service client %q listed twice", iss.URL, sc.ClientID)
 			}
 			clients[sc.ClientID] = true
+			anyServiceClient = true
 		}
+	}
+	if err := c.Create.validate(anyServiceClient); err != nil {
+		return err
 	}
 	if len(c.Algorithms) == 0 {
 		c.Algorithms = []string{"RS256", "ES256"}
@@ -171,4 +186,26 @@ func isLoopback(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validate checks the submit rule and fills in defaults.
+func (c *CreateConfig) validate(anyServiceClient bool) error {
+	if c.EntitlementClaim == "" {
+		c.EntitlementClaim = defaultEntitlementClaim
+	}
+	seen := map[string]bool{}
+	for _, e := range c.Entitlements {
+		if e == "" {
+			return fmt.Errorf("create: empty entitlement")
+		}
+		if seen[e] {
+			return fmt.Errorf("create: entitlement %q listed twice", e)
+		}
+		seen[e] = true
+	}
+	if len(c.Entitlements) == 0 && !anyServiceClient {
+		// Nobody could ever create: a configuration error, not a policy.
+		return fmt.Errorf("create: no entitlements and no service clients configured, so nobody could create runs")
+	}
+	return nil
 }

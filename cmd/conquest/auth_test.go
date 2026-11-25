@@ -24,7 +24,7 @@ func TestNewAuthMiddleware_Off(t *testing.T) {
 
 func TestNewAuthMiddleware_ServiceInfo(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "auth.yaml")
-	if err := os.WriteFile(file, []byte("issuers:\n  - url: http://127.0.0.1:1/\n    audiences: [web]\n"), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte("issuers:\n  - url: http://127.0.0.1:1/\n    audiences: [web]\n    service_clients: [{client_id: svc}]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ok := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -63,6 +63,45 @@ func TestNewAuthMiddleware_ServiceInfo(t *testing.T) {
 			if got := w.Code == http.StatusOK; got != tt.open {
 				t.Errorf("public=%v %s %s: status %d", public, tt.method, tt.path, w.Code)
 			}
+		}
+	}
+}
+
+// The submit rule applies to exactly the routes that create runs or tasks:
+// WES POST /runs and public TES POST /tasks, as matched by the router.
+func TestIsCreate(t *testing.T) {
+	ok := func(w http.ResponseWriter, r *http.Request) {
+		if isCreate(r) {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+	r := chi.NewRouter()
+	r.Group(func(r chi.Router) {
+		r.Use(func(next http.Handler) http.Handler { return next })
+		r.Post("/ga4gh/wes/v1/runs", ok)
+		r.Get("/ga4gh/wes/v1/runs", ok)
+		r.Post("/ga4gh/wes/v1/runs/{run_id}/cancel", ok)
+		r.Post("/ga4gh/tes/v1/tasks", ok)
+		r.Get("/ga4gh/tes/v1/tasks", ok)
+		r.Post("/ga4gh/tes/v1/tasks/{id}:cancel", ok)
+	})
+	for _, tt := range []struct {
+		method, path string
+		create       bool
+	}{
+		{http.MethodPost, "/ga4gh/wes/v1/runs", true},
+		{http.MethodPost, "/ga4gh/tes/v1/tasks", true},
+		{http.MethodGet, "/ga4gh/wes/v1/runs", false},
+		{http.MethodGet, "/ga4gh/tes/v1/tasks", false},
+		{http.MethodPost, "/ga4gh/wes/v1/runs/r1/cancel", false},
+		{http.MethodPost, "/ga4gh/tes/v1/tasks/t1:cancel", false},
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(tt.method, tt.path, nil))
+		if got := w.Code == http.StatusCreated; got != tt.create {
+			t.Errorf("%s %s: create %v", tt.method, tt.path, got)
 		}
 	}
 }
