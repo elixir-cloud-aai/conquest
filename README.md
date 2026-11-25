@@ -423,8 +423,11 @@ TES API (`POST /ga4gh/tes/v1/tasks`) needs, besides a valid token, one of:
   (a list of strings or one string). Values are compared as exact strings,
   never as prefixes; the userinfo `sub` must equal the token's `sub`.
 
-Anyone else is refused with 403, including tokens of clients that aren't
-listed (`sub == client_id`; the issuer isn't asked for them). Without
+Any other caller with a valid token is refused with 403, including a
+client that isn't listed (`sub == client_id`; the issuer isn't asked for
+it) whose token passes validation because its `aud` contains a configured
+audience. Such a client's token with only its own ID in `aud` fails token
+validation already (401). Without
 `create.entitlements`, only listed service clients create. The server
 doesn't start if neither entitlements nor service clients are configured,
 since nobody could create runs.
@@ -471,7 +474,10 @@ authentication on all the same, so that no run straddles the change.
 
 Upgrading from a version without the create rule: an auth config needs
 `create.entitlements` or at least one service client, or the server
-doesn't start; until then, any authenticated caller could create.
+doesn't start; until then, any authenticated caller could create. Replicas
+still running the old version accept creates by any authenticated caller
+until they are replaced, so with more than one replica, roll out with
+the Deployment strategy `Recreate` (or scale to one first).
 
 ## Federation: Remote TES Endpoints
 

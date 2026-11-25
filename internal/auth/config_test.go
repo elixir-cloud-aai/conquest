@@ -3,6 +3,7 @@ package auth
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -54,7 +55,7 @@ create:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(cfg.Create.Entitlements, ",") != "urn:example:group:compute#a,urn:example:group:compute#b" ||
+	if !slices.Equal(cfg.Create.Entitlements, []string{"urn:example:group:compute#a", "urn:example:group:compute#b"}) ||
 		cfg.Create.EntitlementClaim != "groups" || cfg.Issuers[0].UserinfoURI != "https://login.example.org/oidc/userinfo" {
 		t.Errorf("config = %+v", cfg)
 	}
