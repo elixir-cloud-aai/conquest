@@ -316,3 +316,66 @@ func TestLoad_RunnerSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_CORSAndServiceInfo(t *testing.T) {
+	base := func(t *testing.T) {
+		clearAuthEnv(t)
+		t.Setenv("CONQUEST_POSTGRES_DSN", "postgres://example")
+		t.Setenv("CONQUEST_S3_BUCKET", "conquest")
+		for _, k := range []string{"CONQUEST_CORS_ALLOWED_ORIGINS", "CONQUEST_SERVICE_INFO_ID", "CONQUEST_SERVICE_INFO_NAME",
+			"CONQUEST_SERVICE_INFO_ORGANIZATION_NAME", "CONQUEST_SERVICE_INFO_ORGANIZATION_URL", "CONQUEST_SERVICE_INFO_VERSION"} {
+			t.Setenv(k, "")
+		}
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		base(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cfg.CORSAllowedOrigins) != 0 || !cfg.ServiceInfo.IsZero() {
+			t.Fatalf("origins %v, service-info %+v", cfg.CORSAllowedOrigins, cfg.ServiceInfo)
+		}
+	})
+	t.Run("origins", func(t *testing.T) {
+		base(t)
+		t.Setenv("CONQUEST_CORS_ALLOWED_ORIGINS", "https://portal.example.org, http://localhost:3000")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(cfg.CORSAllowedOrigins, " ") != "https://portal.example.org http://localhost:3000" {
+			t.Fatalf("origins %v", cfg.CORSAllowedOrigins)
+		}
+	})
+	t.Run("wildcard origin", func(t *testing.T) {
+		base(t)
+		t.Setenv("CONQUEST_CORS_ALLOWED_ORIGINS", "*")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CONQUEST_CORS_ALLOWED_ORIGINS") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("complete service-info", func(t *testing.T) {
+		base(t)
+		t.Setenv("CONQUEST_SERVICE_INFO_ID", "org.example.conquest")
+		t.Setenv("CONQUEST_SERVICE_INFO_NAME", "Conquest")
+		t.Setenv("CONQUEST_SERVICE_INFO_ORGANIZATION_NAME", "Example")
+		t.Setenv("CONQUEST_SERVICE_INFO_ORGANIZATION_URL", "https://example.org")
+		t.Setenv("CONQUEST_SERVICE_INFO_VERSION", "1.0.0")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ServiceInfo.ID != "org.example.conquest" || cfg.ServiceInfo.OrganizationURL != "https://example.org" {
+			t.Fatalf("service-info %+v", cfg.ServiceInfo)
+		}
+	})
+	t.Run("incomplete service-info", func(t *testing.T) {
+		base(t)
+		t.Setenv("CONQUEST_SERVICE_INFO_ID", "org.example.conquest")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CONQUEST_SERVICE_INFO_NAME") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
