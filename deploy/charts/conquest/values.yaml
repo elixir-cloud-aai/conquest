@@ -202,6 +202,18 @@ storageGateway:
   # Existing Secret with key "secret" (>= 32 bytes); generated if empty.
   existingSecret: ""
 
+# Storage isolation: task pods get no S3 credentials. Their stage-in and
+# stage-out go through the storage gateway on Conquest's in-cluster address
+# (CONQUEST_INTERNAL_BASE_URL), with one capability URL per task, and every
+# task, local or remote, may reach only objects below its run's root. Task
+# pods must reach Conquest's Service and the presign endpoint
+# (storageGateway.s3PublicEndpoint if set, else CONQUEST_S3_ENDPOINT).
+# Uses the storage gateway's secret (storageGateway.existingSecret, or one
+# generated); storageGateway.enabled is needed only for remote endpoints.
+# Runner pods still get the S3 credentials (internal/isolation).
+storageIsolation:
+  enabled: false
+
 # Federation: route tasks to remote GA4GH TES endpoints (Funnel, TESK,
 # Poiesis, proTES, another Conquest). Off by default: every task runs on
 # this cluster. See internal/backend/routing for the schema.

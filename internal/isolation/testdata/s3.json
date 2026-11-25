@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "conquest-test",
+      "credentials": [{"accessKey": "conquest-test", "secretKey": "conquest-test-secret"}],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/anuragxxd/conquest/internal/filer"
+	"github.com/anuragxxd/conquest/internal/isolation"
 	"github.com/anuragxxd/conquest/internal/objstore"
 )
 
@@ -36,6 +37,11 @@ func runFilerStageIn(log *slog.Logger) error {
 	if !filer.ManifestNeedsObjectStoreForStageIn(manifest) {
 		ctx := context.Background()
 		return filer.StageIn(ctx, nil, manifest, log)
+	}
+
+	// Without S3 credentials: through the storage gateway.
+	if client, ok := isolation.ClientFromEnv(); ok {
+		return filer.StageIn(context.Background(), client, manifest, log)
 	}
 
 	if endpoint == "" || accessKey == "" || secretKey == "" {
