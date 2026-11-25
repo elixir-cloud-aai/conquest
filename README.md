@@ -269,6 +269,21 @@ Conquest manages the full task lifecycle — data staging, resource allocation,
 state tracking, and log capture. The workflow engine submits tasks; Conquest
 handles the rest.
 
+### Run owners
+
+Every run can record the caller that created it (`runs.owner`, migration
+000009; package `internal/ownership`). When a request's context is scoped to
+an owner, new runs are stamped with that owner, and the repository returns
+only that owner's runs and their tasks: another owner's run or task, or one
+created without an owner, reads as not found. A context without an owner is
+unscoped and sees every run, as before; no code path sets an owner yet, so
+existing deployments see no change. Only reads are scoped: writes address a
+run or task that a scoped read has returned, and aggregates (the state
+counts in `service-info`) and internal callers (reconcilers, the dispatcher,
+the runner callback API) stay unscoped. A public TES task that names a run
+in the tag `conquest_run_id` is refused with 404 unless the caller can read
+that run.
+
 ## Federation: Remote TES Endpoints
 
 Conquest can send individual tasks to other GA4GH TES servers (Funnel, TESK,
@@ -453,6 +468,18 @@ layout paths, adapter logic, reconciler behavior, and more.
 ```bash
 make test          # go test -v -race -count=1 ./...
 make test-short    # go test -short -race ./...
+```
+
+The PostgreSQL repository tests carry the build tag `integration` and need a
+migrated database; without `CONQUEST_TEST_POSTGRES_DSN` they skip. CI runs
+them in the `Integration tests` job, which also rolls the newest migration
+back and forth. Locally, with
+[migrate](https://github.com/golang-migrate/migrate) installed:
+
+```bash
+export CONQUEST_TEST_POSTGRES_DSN=postgres://...
+migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" up
+go test -tags integration ./internal/repository/pg/
 ```
 
 ## Configuration

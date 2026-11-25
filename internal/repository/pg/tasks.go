@@ -57,13 +57,15 @@ const taskColumns = `task_id, run_id, engine_task_name, tes_task_id,
 	workspace_pv_name, backend_name, route`
 
 func (s *TaskStore) Get(ctx context.Context, taskID string) (*domain.Task, error) {
+	filter, args := taskOwnerFilter(ctx, taskID)
 	return s.scanTask(ctx,
-		`SELECT `+taskColumns+` FROM tasks WHERE task_id = $1`, taskID)
+		`SELECT `+taskColumns+` FROM tasks WHERE task_id = $1`+filter, args...)
 }
 
 func (s *TaskStore) GetByTESID(ctx context.Context, tesTaskID string) (*domain.Task, error) {
+	filter, args := taskOwnerFilter(ctx, tesTaskID)
 	return s.scanTask(ctx,
-		`SELECT `+taskColumns+` FROM tasks WHERE tes_task_id = $1`, tesTaskID)
+		`SELECT `+taskColumns+` FROM tasks WHERE tes_task_id = $1`+filter, args...)
 }
 
 func (s *TaskStore) List(ctx context.Context, page repository.Page) (*repository.PageResult[*domain.Task], error) {
@@ -76,20 +78,23 @@ func (s *TaskStore) List(ctx context.Context, page repository.Page) (*repository
 	var err error
 
 	if page.Token == "" {
+		filter, args := taskOwnerFilter(ctx, limit+1)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+taskColumns+` FROM tasks
+			WHERE TRUE`+filter+`
 			ORDER BY created_at DESC, task_id DESC
-			LIMIT $1`, limit+1)
+			LIMIT $1`, args...)
 	} else {
 		cursorTime, cursorID, parseErr := parseCursor(page.Token)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid page token: %w", parseErr)
 		}
+		filter, args := taskOwnerFilter(ctx, cursorTime, cursorID, limit+1)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+taskColumns+` FROM tasks
-			WHERE (created_at, task_id) < ($1, $2)
+			WHERE (created_at, task_id) < ($1, $2)`+filter+`
 			ORDER BY created_at DESC, task_id DESC
-			LIMIT $3`, cursorTime, cursorID, limit+1)
+			LIMIT $3`, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
@@ -162,21 +167,23 @@ func (s *TaskStore) ListByRunID(ctx context.Context, runID string, page reposito
 	var err error
 
 	if page.Token == "" {
+		filter, args := taskOwnerFilter(ctx, runID, limit+1)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+taskColumns+` FROM tasks
-			WHERE run_id = $1
+			WHERE run_id = $1`+filter+`
 			ORDER BY created_at ASC, task_id ASC
-			LIMIT $2`, runID, limit+1)
+			LIMIT $2`, args...)
 	} else {
 		cursorTime, cursorID, parseErr := parseCursor(page.Token)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid page token: %w", parseErr)
 		}
+		filter, args := taskOwnerFilter(ctx, runID, cursorTime, cursorID, limit+1)
 		rows, err = s.pool.Query(ctx,
 			`SELECT `+taskColumns+` FROM tasks
-			WHERE run_id = $1 AND (created_at, task_id) > ($2, $3)
+			WHERE run_id = $1 AND (created_at, task_id) > ($2, $3)`+filter+`
 			ORDER BY created_at ASC, task_id ASC
-			LIMIT $4`, runID, cursorTime, cursorID, limit+1)
+			LIMIT $4`, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list tasks by run: %w", err)

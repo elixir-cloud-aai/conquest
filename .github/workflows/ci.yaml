@@ -46,6 +46,47 @@ jobs:
       - name: go test
         run: go test -race -count=1 ./...
 
+  # Repository tests against a real PostgreSQL (build tag `integration`),
+  # after checking that the newest migration also rolls back cleanly
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      CONQUEST_TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: stable
+          cache: true
+
+      # Same migrate version as the server image (docker/server/Dockerfile)
+      - name: Install migrate
+        run: go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.17.0
+
+      - name: Migrate up, down one step and up again
+        run: |
+          migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" up
+          migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" down 1
+          migrate -path migrations -database "$CONQUEST_TEST_POSTGRES_DSN" up
+
+      - name: go test (integration)
+        run: go test -race -count=1 -tags integration ./internal/repository/pg/
+
   python-plugin:
     runs-on: ubuntu-latest
     steps:
@@ -70,7 +111,7 @@ jobs:
   ci-passed:
     name: CI passed
     if: always()
-    needs: [build-test, python-plugin]
+    needs: [build-test, integration, python-plugin]
     runs-on: ubuntu-latest
     permissions: {}
     steps:
