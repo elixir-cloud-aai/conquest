@@ -218,13 +218,23 @@ storageGateway:
 storageIsolation:
   enabled: false
 
+# Runner callback authentication: each runner pod gets its run's runner
+# token (env CONQUEST_RUNNER_TOKEN, derived from this secret and the run ID),
+# and the runner callback API (/internal/runs/<run ID>/...) accepts only that
+# token for that run, while the run is active (README: Runner callbacks).
+# Always on with the chart. Rotating the secret fails active runs: drain
+# them first.
+runner:
+  # Existing Secret with key "runner-secret" (>= 32 bytes); generated if empty.
+  existingSecret: ""
+
 # Token authentication on the public WES and TES APIs (README:
 # Authentication). Off by default: the APIs are open. When on, every request
 # needs an OAuth 2.0 access token of a configured issuer, callers see only
 # their own runs, and creating runs or tasks needs a listed service client
 # or a user holding one of create.entitlements (asked at the issuer's
-# userinfo endpoint). Probes, the runner callback API and the storage
-# gateway are not affected.
+# userinfo endpoint). Probes, the runner callback API (runner tokens, see
+# runner above) and the storage gateway are not affected.
 auth:
   enabled: false
   # Leave service-info open (a token sent there is ignored).

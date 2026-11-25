@@ -281,10 +281,13 @@ after the task ends.
   prefix. Listings answer at most 100000 keys (`413` beyond).
 - The bound is only as strong as the task's run ID, which comes from the
   caller: the runner callback API (`/internal/runs/<run ID>/...`) and the
-  `conquest_run_id` tag on the public TES API attach a task to any run,
-  unauthenticated, so isolation holds only where callers that can reach
-  those APIs are trusted, until they are authenticated and checked for the
-  run's owner.
+  `conquest_run_id` tag on the public TES API attach a task to a run. With
+  `CONQUEST_RUNNER_SECRET` set (always with the chart), the callback API
+  takes only the runner token of the run in its path (see
+  [Runner callbacks](#runner-callbacks)); with authentication on, the tag
+  attaches tasks only to the caller's own runs (see Run owners). Without
+  them, isolation holds only where callers that can reach those APIs are
+  trusted.
 - The bound uses the current `CONQUEST_LAYOUT_VERSION`: drain runs before
   changing it.
 - Task staging depends on Conquest being up: the filer retries connection
@@ -349,7 +352,8 @@ Off by default: the APIs are open, as before, and the server logs a warning
 at startup. With `CONQUEST_AUTH_ENABLED=true`, every request to the public
 WES and TES routes needs an OAuth 2.0 access token in an
 `Authorization: Bearer` header (package `internal/auth`). Probes, the runner
-callback API (`/internal/runs/...`) and the storage gateway are not
+callback API (`/internal/runs/...`, which takes runner tokens instead, see
+[Runner callbacks](#runner-callbacks)) and the storage gateway are not
 affected. `service-info` stays open unless
 `CONQUEST_AUTH_SERVICE_INFO_PUBLIC=false`; a token sent there is ignored.
 
@@ -461,17 +465,12 @@ tokens).
 With the Helm chart, set `auth.enabled` and `auth.config` (see
 [Securing a deployment with the chart](#securing-a-deployment-with-the-chart)).
 
-The runner callback API (`/internal/runs/...`) has no authentication yet
-and reaches every task. Keep it off any public route: expose only
-`/ga4gh/wes/` (and `/ga4gh/tes/` if needed) through the ingress or
-gateway, and restrict in-cluster access to the server's port with a
-NetworkPolicy where you can. Authenticating the runners is a follow-up.
-
 Upgrading: runs created before authentication have no owner and are no
 longer visible through the API (operators can still inspect and delete them
-in PostgreSQL). Workflow runners call the unauthenticated runner callback
-API, so runs keep working; drain active runs before switching
-authentication on all the same, so that no run straddles the change.
+in PostgreSQL). Drain active runs before switching authentication on, so
+that no run straddles the change. Authentication needs
+`CONQUEST_RUNNER_SECRET` (see [Runner callbacks](#runner-callbacks)): the
+server refuses to start with `CONQUEST_AUTH_ENABLED=true` without it.
 
 Upgrading from a version without the create rule: an auth config needs
 `create.entitlements` or at least one service client, or the server
@@ -479,6 +478,44 @@ doesn't start; until then, any authenticated caller could create. Replicas
 still running the old version accept creates by any authenticated caller
 until they are replaced, so with more than one replica, roll out with
 the Deployment strategy `Recreate` (or scale to one first).
+
+### Runner callbacks
+
+Workflow runners submit, poll and cancel their tasks on the runner callback
+API, `/internal/runs/<run ID>/ga4gh/tes/v1/...` (package
+`internal/runnerauth`). With `CONQUEST_RUNNER_SECRET` set (at least 32
+bytes; the chart always sets it):
+
+- Each run has its own runner token, `HMAC-SHA256(secret, "runner:" + run
+  ID)` in hex. Conquest derives it when it starts the runner Job and gives
+  it to the runner as `CONQUEST_RUNNER_TOKEN`; it is stored nowhere.
+- Every callback, `service-info` included, needs `Authorization: Bearer
+  <runner token>` of the run in its path (compared in constant time), else
+  `401`. User and service tokens are not accepted there. Once the run is
+  terminal its token is refused (`401`); a missing run is `404`.
+- Getting or cancelling a task of another run through a run's path is
+  `404`, as is any task ID that doesn't exist.
+- The engines send the token on every call: Nextflow through nf-ga4gh's
+  `tes.oauthToken` in the generated config, Snakemake and miniwdl through
+  Conquest's plugins (py-tes `token`).
+
+So a runner, and workflow code running next to it (the token is readable
+in the runner pod and, in `pvc` and `objectfs` mode, in the run's
+`nextflow.config` on the workspace), can act on its own run only. The
+token is in the runner Job's spec: who can read Jobs in the namespace can
+act on active runs; runner pods don't mount a service account token.
+
+Without `CONQUEST_RUNNER_SECRET` the callback API stays open, as before, and
+the server logs a warning: keep it off any public route and restrict
+in-cluster access to the server's port with a NetworkPolicy where you can.
+Either way, expose only `/ga4gh/wes/` (and the storage gateway if needed)
+publicly.
+
+Upgrading: runs started before the secret was set (or before it was
+rotated) have no valid token, so their callbacks fail and the runs fail.
+Drain active runs before setting or rotating the secret; with more than one
+replica, roll out with the Deployment strategy `Recreate`, since all
+replicas must use the same secret.
 
 ## Federation: Remote TES Endpoints
 
@@ -709,6 +746,7 @@ No config files.
 | `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Task init container resources     |
 | `CONQUEST_STORAGE_ISOLATION`        | `false`              | No S3 credentials in task pods (see Storage Isolation) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
+| `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
 | `CONQUEST_RECONCILER_INTERVAL`      | `5s`                 | How often reconcilers poll K8s    |
 | `CONQUEST_ASYNC_DISPATCH`           | `true`               | Submit TES tasks in the background |
 | `CONQUEST_DISPATCH_WORKERS`         | `8`                  | Task submissions in parallel      |
@@ -746,7 +784,7 @@ migrations, health probes, and a non-root security context.
 
 ### Securing a deployment with the chart
 
-Both settings below are off by default; turn them on for any deployment
+Token authentication and storage isolation are off by default; turn them on for any deployment
 that others can reach.
 
 - **Token authentication** (see Authentication): `auth.enabled: true` sets
@@ -758,6 +796,10 @@ that others can reach.
   the config changes. `auth.config.issuers` is required when enabled
   (`helm template` fails without it), and the server refuses to start
   without `create.entitlements` or at least one service client.
+- **Runner callbacks** (see Runner callbacks): always authenticated. The
+  chart generates the Secret `<fullname>-runner` (default `conquest-runner`, key
+  `runner-secret`) once and keeps it across upgrades, or uses
+  `runner.existingSecret` (same key, at least 32 bytes).
 - **Storage isolation** (see Storage Isolation): `storageIsolation.enabled:
   true` keeps S3 credentials out of task pods.
   Runner pods still get the bucket-wide S3 credentials (see Storage
@@ -787,7 +829,8 @@ storageIsolation:
 ```
 
 Upgrading: drain active runs before switching authentication on (see
-Authentication), and set `conquest.strategy: {type: Recreate}` for that
+Authentication) and before the first upgrade to a chart with runner
+tokens (see Runner callbacks: runs started before fail), and set `conquest.strategy: {type: Recreate}` for that
 upgrade: with the default rolling update, old pods keep serving without
 authentication (or without the new create rule) until they are replaced.
 
