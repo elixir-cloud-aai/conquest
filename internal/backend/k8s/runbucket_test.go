@@ -258,3 +258,19 @@ func TestIsolatedTaskPods_GetNoSecretAndNoAPIToken(t *testing.T) {
 		}
 	}
 }
+
+// Without isolation, task pods get the configured bucket-wide Secret and no
+// other, and no API token.
+func TestTaskPods_GetOnlyTheConfiguredSecretAndNoAPIToken(t *testing.T) {
+	cfg := helperTestConfig()
+	cfg.StorageSecretName = "storage-secrets"
+	job, err := buildJobSpec(helperTestTask(t), cfg, emptyDirWS())
+	if err != nil {
+		t.Fatalf("build task job: %v", err)
+	}
+	spec := job.Spec.Template.Spec
+	assertNoAPIToken(t, spec)
+	if got := podSecretNames(spec); !slices.Equal(got, []string{"storage-secrets"}) {
+		t.Fatalf("task pod reads Secrets %v, want only storage-secrets", got)
+	}
+}

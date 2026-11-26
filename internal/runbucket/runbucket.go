@@ -15,6 +15,11 @@
 //
 // The Shared provisioner keeps today's behaviour: every run uses the one
 // configured bucket, under its run root, with the bucket-wide credentials.
+//
+// Known limit: so far only the runner and the run's root follow the run's
+// bucket. The server's own reads and writes (outputs, logs, the storage
+// gateway) and task pods still use the configured bucket, so a provisioner
+// that returns another bucket needs them to follow first.
 package runbucket
 
 import (

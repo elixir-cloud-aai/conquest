@@ -150,20 +150,7 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	}
 
 	runID := domain.NewID()
-	layout, storageSecret, err := c.ensureRunBucket(ctx, runID)
-	if err != nil {
-		return nil, err
-	}
-	// Until the run is created, a failure leaves nothing that refers to the
-	// run's bucket: delete it again.
-	created := false
-	defer func() {
-		if !created {
-			c.deleteRunBucket(runID)
-		}
-	}()
-
-	prepared, err := runAdapter.PrepareRun(runID, adapter.SubmissionRequest{
+	submission := adapter.SubmissionRequest{
 		WorkflowType:             req.WorkflowType,
 		WorkflowTypeVersion:      req.WorkflowTypeVersion,
 		WorkflowURL:              req.WorkflowURL,
@@ -172,9 +159,34 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 		WorkflowEngineVersion:    req.WorkflowEngineVersion,
 		WorkflowEngineParameters: req.WorkflowEngineParameters,
 		Tags:                     req.Tags,
-	}, layout)
+	}
+	// Preparing a run only validates and builds the runner's command, so an
+	// invalid request fails here, before the run gets a bucket.
+	layout := c.layout
+	prepared, err := runAdapter.PrepareRun(runID, submission, layout)
 	if err != nil {
 		return nil, err
+	}
+
+	// Until the run is stored, a failure (Ensure's included: it may have made
+	// half a bucket) leaves nothing that refers to the run's bucket: delete
+	// it again. A failed Create keeps the bucket: the run may have been
+	// stored before the error.
+	keepBucket := false
+	defer func() {
+		if !keepBucket {
+			c.deleteRunBucket(runID)
+		}
+	}()
+	runLayout, storageSecret, err := c.ensureRunBucket(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	if runLayout != layout {
+		layout = runLayout
+		if prepared, err = runAdapter.PrepareRun(runID, submission, layout); err != nil {
+			return nil, err
+		}
 	}
 	prepared.RunnerSpec.StorageSecretName = storageSecret
 
@@ -193,10 +205,13 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	run.RunRootURI = layout.RunRootURI(run.RunID)
 	run.ResolvedWorkflowRef = prepared.ResolvedWorkflowRef
 
+	keepBucket = true
 	if err := c.runs.Create(ctx, run); err != nil {
+		if c.runBuckets != nil {
+			c.log.Warn("run may not have been stored; its bucket is kept", "run_id", runID, "bucket", layout.Bucket)
+		}
 		return nil, fmt.Errorf("create run: %w", err)
 	}
-	created = true
 
 	event := domain.NewEvent(run.RunID, "", domain.EventRunCreated, prepared.RequestPayload)
 	if err := c.events.Append(ctx, event); err != nil {
@@ -266,7 +281,6 @@ func (c *RunController) ensureRunBucket(ctx context.Context, runID string) (stor
 	}
 	bucket, err := c.runBuckets.Ensure(ctx, runID)
 	if err != nil {
-		c.deleteRunBucket(runID)
 		return storage.Layout{}, "", fmt.Errorf("provision run bucket: %w", err)
 	}
 	layout.Bucket = bucket.Name

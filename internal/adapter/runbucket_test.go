@@ -57,14 +57,23 @@ func TestPrepareRun_RunnerUsesTheLayoutsBucket(t *testing.T) {
 				t.Fatalf("PrepareRun: %v", err)
 			}
 			args := prepared.RunnerSpec.Args
-			bucket := ""
+			bucket, found, uris := "", false, 0
 			for i, arg := range args {
 				if arg == "--s3-bucket" && i+1 < len(args) {
-					bucket = args[i+1]
+					bucket, found = args[i+1], true
 				}
-				if strings.HasPrefix(arg, "s3://") && !strings.HasPrefix(arg, "s3://"+layout.Bucket+"/") {
-					t.Errorf("runner arg %q is outside the run's bucket", arg)
+				if strings.HasPrefix(arg, "s3://") {
+					uris++
+					if !strings.HasPrefix(arg, "s3://"+layout.Bucket+"/") {
+						t.Errorf("runner arg %q is outside the run's bucket", arg)
+					}
 				}
+			}
+			if !found {
+				t.Fatal("runner args have no --s3-bucket")
+			}
+			if uris == 0 {
+				t.Fatal("runner args have no s3:// URI to check")
 			}
 			if bucket != layout.Bucket {
 				t.Fatalf("--s3-bucket = %q, want %q", bucket, layout.Bucket)

@@ -220,7 +220,8 @@ storageIsolation:
   # Where each run's objects live and which S3 credentials its runner pod
   # gets (CONQUEST_RUN_BUCKETS, README: Run buckets). "shared" (the only
   # value so far): every run in CONQUEST_S3_BUCKET, every runner with the
-  # bucket-wide credentials (CONQUEST_STORAGE_SECRET_NAME).
+  # bucket-wide credentials (CONQUEST_STORAGE_SECRET_NAME). Applies whether
+  # or not storage isolation is enabled.
   runBuckets: shared
 
 # Runner callback authentication: each runner pod gets its run's runner

@@ -305,27 +305,34 @@ after the task ends.
 
 `CONQUEST_RUN_BUCKETS` (chart: `storageIsolation.runBuckets`) selects where
 each run's objects live and which S3 credentials its runner pod gets
-(`internal/runbucket`). Conquest asks for the run's bucket before it
-prepares the run; the run's root is `s3://<run's bucket>/<layout
+(`internal/runbucket`). Conquest asks for the run's bucket once the
+request is valid; the run's root is `s3://<run's bucket>/<layout
 version>/workflow-runs/<run ID>/`, and the runner gets the bucket's name and
 the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` of the run's
-Secret, by `secretKeyRef`. If the run can't be created after its bucket
-was made (invalid request, database error), Conquest deletes the bucket
-again; a run that was created keeps it, also when its runner fails to start.
+Secret, by `secretKeyRef`. An invalid request gets no bucket. If the run
+fails after that but before it is stored, Conquest deletes the bucket
+again; if storing the run fails, the bucket is kept (the run may have been
+stored anyway), as is the bucket of a stored run whose runner fails to
+start.
 
-| Value              | Bucket of every run   | Runner's credentials                     |
-|--------------------|-----------------------|------------------------------------------|
-| `shared` (default) | `CONQUEST_S3_BUCKET`  | `CONQUEST_STORAGE_SECRET_NAME`, bucket-wide |
+| Value              | Bucket of every run  | Runner's credentials                        |
+|--------------------|----------------------|---------------------------------------------|
+| `shared` (default) | `CONQUEST_S3_BUCKET` | `CONQUEST_STORAGE_SECRET_NAME`, bucket-wide |
 
 With `shared`, workflow code in a runner can read and write every run's
 objects in the bucket, as before. Per-run buckets, with credentials that
-reach only the run's own bucket, are planned as further values.
+reach only the run's own bucket, are planned as further values. So far
+only the runner and the run's root follow the run's bucket; the server's
+own reads and writes (outputs, logs, the storage gateway) and task pods
+still use `CONQUEST_S3_BUCKET`, which is the same bucket with `shared`.
 
 Whatever the value, runner and task pods get no ServiceAccount token
-(`automountServiceAccountToken: false`, no projected token) and no Secret
-but their own run's: only the Conquest server talks to the Kubernetes API,
-so workflow code can't read another run's Secret in the namespace. Tests
-in `internal/backend/k8s` (`runbucket_test.go`) hold this for every engine,
+(`automountServiceAccountToken: false`, no projected token): only the
+Conquest server talks to the Kubernetes API, so workflow code can't read
+other Secrets in the namespace. A runner pod gets no Secret but its own
+run's. Task pods get no Secret at all with storage isolation; without it,
+they get the bucket-wide `CONQUEST_STORAGE_SECRET_NAME`. Tests in
+`internal/backend/k8s` (`runbucket_test.go`) hold this for every engine,
 workspace mode and pod security profile.
 
 ## GA4GH APIs

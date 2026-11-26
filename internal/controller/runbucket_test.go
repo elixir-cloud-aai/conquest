@@ -107,36 +107,58 @@ func TestSubmitRun_FailsWithoutCreatingTheRunIfTheBucketFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no bucket") {
 		t.Fatalf("err = %v, want the bucket error", err)
 	}
-	if runAdapter.called || runs.createRun != nil || runBackend.spec != nil {
-		t.Fatal("run was prepared, persisted or submitted without a bucket")
+	if runs.createRun != nil || runBackend.spec != nil {
+		t.Fatal("run was persisted or submitted without a bucket")
 	}
 	if !slices.Equal(buckets.deleted, buckets.ensured) {
 		t.Fatalf("deleted %v, want the half-made bucket %v deleted", buckets.deleted, buckets.ensured)
 	}
 }
 
-func TestSubmitRun_DeletesTheBucketOfARunThatWasNotCreated(t *testing.T) {
-	for name, tc := range map[string]struct {
-		runs       *runStoreStub
-		runAdapter *runAdapterStub
-	}{
-		"invalid request": {&runStoreStub{}, &runAdapterStub{err: &adapter.ValidationError{Field: "workflow_url", Msg: "bad"}}},
-		"store fails":     {&runStoreStub{createErr: errors.New("db down")}, &runAdapterStub{prepared: preparedNextflowRun()}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			buckets := &runBucketsStub{}
-			runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+// An invalid request fails before the run gets a bucket.
+func TestSubmitRun_InvalidRequestGetsNoBucket(t *testing.T) {
+	buckets := &runBucketsStub{}
+	runAdapter := &runAdapterStub{err: &adapter.ValidationError{Field: "workflow_url", Msg: "bad"}}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
 
-			if _, err := runBucketsController(tc.runs, tc.runAdapter, runBackend, buckets).SubmitRun(context.Background(), nextflowRequest); err == nil {
-				t.Fatal("expected an error")
-			}
-			if len(buckets.ensured) != 1 || !slices.Equal(buckets.deleted, buckets.ensured) {
-				t.Fatalf("ensured %v, deleted %v, want the run's bucket deleted", buckets.ensured, buckets.deleted)
-			}
-			if runBackend.spec != nil {
-				t.Fatal("runner was submitted")
-			}
-		})
+	if _, err := runBucketsController(&runStoreStub{}, runAdapter, runBackend, buckets).SubmitRun(context.Background(), nextflowRequest); err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(buckets.ensured) != 0 || len(buckets.deleted) != 0 {
+		t.Fatalf("ensured %v, deleted %v, want no bucket for an invalid request", buckets.ensured, buckets.deleted)
+	}
+}
+
+// A run that fails to prepare in its own bucket gets its bucket deleted.
+func TestSubmitRun_DeletesTheBucketIfTheRunFailsToPrepareInIt(t *testing.T) {
+	buckets := &runBucketsStub{}
+	runAdapter := &runAdapterStub{prepared: preparedNextflowRun(), failInBucketPrefix: "conquest-run-"}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+
+	if _, err := runBucketsController(&runStoreStub{}, runAdapter, runBackend, buckets).SubmitRun(context.Background(), nextflowRequest); err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(buckets.ensured) != 1 || !slices.Equal(buckets.deleted, buckets.ensured) {
+		t.Fatalf("ensured %v, deleted %v, want the run's bucket deleted", buckets.ensured, buckets.deleted)
+	}
+	if runBackend.spec != nil {
+		t.Fatal("runner was submitted")
+	}
+}
+
+// A failed Create may still have stored the run: its bucket is kept.
+func TestSubmitRun_KeepsTheBucketIfStoringTheRunFails(t *testing.T) {
+	buckets := &runBucketsStub{}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+
+	if _, err := runBucketsController(&runStoreStub{createErr: errors.New("db down")}, &runAdapterStub{prepared: preparedNextflowRun()}, runBackend, buckets).SubmitRun(context.Background(), nextflowRequest); err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(buckets.ensured) != 1 || len(buckets.deleted) != 0 {
+		t.Fatalf("ensured %v, deleted %v, want the bucket kept", buckets.ensured, buckets.deleted)
+	}
+	if runBackend.spec != nil {
+		t.Fatal("runner was submitted")
 	}
 }
 
