@@ -214,9 +214,14 @@ storageGateway:
 # (storageGateway.s3PublicEndpoint if set, else CONQUEST_S3_ENDPOINT).
 # Uses the storage gateway's secret (storageGateway.existingSecret, or one
 # generated); storageGateway.enabled is needed only for remote endpoints.
-# Runner pods still get the S3 credentials (internal/isolation).
+# Runner pods still get S3 credentials: those of their run's bucket (runBuckets).
 storageIsolation:
   enabled: false
+  # Where each run's objects live and which S3 credentials its runner pod
+  # gets (CONQUEST_RUN_BUCKETS, README: Run buckets). "shared" (the only
+  # value so far): every run in CONQUEST_S3_BUCKET, every runner with the
+  # bucket-wide credentials (CONQUEST_STORAGE_SECRET_NAME).
+  runBuckets: shared
 
 # Runner callback authentication: each runner pod gets its run's runner
 # token (env CONQUEST_RUNNER_TOKEN, derived from this secret and the run ID),

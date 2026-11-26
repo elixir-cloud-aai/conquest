@@ -24,8 +24,9 @@
 // as strong as the authentication of those APIs.
 //
 // The runner pods of the workflow engines are not covered: they still get
-// the S3 credentials, because the engines read and write the run's work
-// directory with their own S3 clients.
+// S3 credentials, because the engines read and write the run's work
+// directory with their own S3 clients. Which credentials, those of a bucket
+// all runs share or of the run's own, internal/runbucket decides.
 package isolation
 
 import (

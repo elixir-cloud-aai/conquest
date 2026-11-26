@@ -297,8 +297,36 @@ after the task ends.
   each output file (5 GiB on AWS and Ceph RGW by default).
 - Not covered: runner pods. The engines read and write the run's work
   directory with their own S3 clients, so the runner still gets the
-  credentials, and workflow code that runs there (Nextflow scripts, Snakefiles)
-  can read them.
+  credentials of its run's bucket (see [Run buckets](#run-buckets)), and
+  workflow code that runs there (Nextflow scripts, Snakefiles) can read
+  them.
+
+### Run buckets
+
+`CONQUEST_RUN_BUCKETS` (chart: `storageIsolation.runBuckets`) selects where
+each run's objects live and which S3 credentials its runner pod gets
+(`internal/runbucket`). Conquest asks for the run's bucket before it
+prepares the run; the run's root is `s3://<run's bucket>/<layout
+version>/workflow-runs/<run ID>/`, and the runner gets the bucket's name and
+the keys `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` of the run's
+Secret, by `secretKeyRef`. If the run can't be created after its bucket
+was made (invalid request, database error), Conquest deletes the bucket
+again; a run that was created keeps it, also when its runner fails to start.
+
+| Value              | Bucket of every run   | Runner's credentials                     |
+|--------------------|-----------------------|------------------------------------------|
+| `shared` (default) | `CONQUEST_S3_BUCKET`  | `CONQUEST_STORAGE_SECRET_NAME`, bucket-wide |
+
+With `shared`, workflow code in a runner can read and write every run's
+objects in the bucket, as before. Per-run buckets, with credentials that
+reach only the run's own bucket, are planned as further values.
+
+Whatever the value, runner and task pods get no ServiceAccount token
+(`automountServiceAccountToken: false`, no projected token) and no Secret
+but their own run's: only the Conquest server talks to the Kubernetes API,
+so workflow code can't read another run's Secret in the namespace. Tests
+in `internal/backend/k8s` (`runbucket_test.go`) hold this for every engine,
+workspace mode and pod security profile.
 
 ## GA4GH APIs
 
@@ -788,6 +816,7 @@ No config files.
 | `CONQUEST_POD_RUN_AS_GROUP`         | `1000`               | GID and fsGroup for those pods    |
 | `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Task init container resources     |
 | `CONQUEST_STORAGE_ISOLATION`        | `false`              | No S3 credentials in task pods (see Storage Isolation) |
+| `CONQUEST_RUN_BUCKETS`              | `shared`             | Each run's bucket and runner credentials (see Run buckets) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
 | `CONQUEST_CORS_ALLOWED_ORIGINS`     | —                    | Exact origins of browser front ends (see CORS) |
@@ -851,10 +880,11 @@ authenticated.
   `runner.existingSecret` there.
 - **Storage isolation** (see Storage Isolation): `storageIsolation.enabled:
   true` keeps S3 credentials out of task pods.
-  Runner pods still get the bucket-wide S3 credentials (see Storage
-  Isolation, "Not covered"): workflow code in a runner can read and write
-  every run's objects in the bucket. Until that is fixed, let only trusted
-  callers create runs (`create.entitlements`), process only data that
+  Runner pods still get the bucket-wide S3 credentials with
+  `storageIsolation.runBuckets: shared`, the only value so far (see Run
+  buckets): workflow code in a runner can read and write every run's
+  objects in the bucket. Until per-run buckets are available, let only
+  trusted callers create runs (`create.entitlements`), process only data that
   isn't sensitive, and tell users about this limit.
 - **Browser front ends and registries**: `cors.allowedOrigins` (exact
   origins, see CORS) and `serviceInfo.*` (see Service info) are empty by
@@ -886,6 +916,9 @@ tokens (see Runner callbacks: runs started before fail), and set
 `conquest.strategy: {type: Recreate}` for that upgrade: with the default
 rolling update, old pods keep serving without authentication (or without
 the new create rule) until they are replaced.
+`storageIsolation.runBuckets` (`CONQUEST_RUN_BUCKETS`) defaults to
+`shared`, which keeps every run in `CONQUEST_S3_BUCKET` as before: the
+upgrade to a chart with this setting needs no step.
 
 CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository
