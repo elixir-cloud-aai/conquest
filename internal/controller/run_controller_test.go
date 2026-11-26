@@ -139,11 +139,15 @@ func TestGetRun_LoadsWorkflowOutputsForWDL(t *testing.T) {
 type runAdapterStub struct {
 	prepared *adapter.PreparedRun
 	err      error
+	called   bool
+	layout   storage.Layout
 }
 
 func (s *runAdapterStub) Name() string { return "nextflow" }
 
-func (s *runAdapterStub) PrepareRun(string, adapter.SubmissionRequest, storage.Layout) (*adapter.PreparedRun, error) {
+func (s *runAdapterStub) PrepareRun(_ string, _ adapter.SubmissionRequest, layout storage.Layout) (*adapter.PreparedRun, error) {
+	s.called = true
+	s.layout = layout
 	return s.prepared, s.err
 }
 
@@ -176,6 +180,7 @@ type runStateUpdate struct {
 }
 
 type runStoreStub struct {
+	createErr        error
 	createRun        *domain.Run
 	getRun           *domain.Run
 	backendRef       string
@@ -185,6 +190,9 @@ type runStoreStub struct {
 }
 
 func (s *runStoreStub) Create(_ context.Context, run *domain.Run) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
 	s.createRun = run
 	return nil
 }

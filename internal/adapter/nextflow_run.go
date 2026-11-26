@@ -16,7 +16,6 @@ type NextflowRunAdapterConfig struct {
 	RunnerImagesByVersion map[string]string
 	InternalBaseURL       string
 	S3Endpoint            string
-	S3Bucket              string
 	S3Region              string
 }
 
@@ -118,7 +117,7 @@ func (a *NextflowRunAdapter) PrepareRun(runID string, req SubmissionRequest, lay
 		"--run-log-key", layout.RunLog(runID),
 		"--internal-tes-base", strings.TrimRight(a.cfg.InternalBaseURL, "/") + "/internal/runs/" + runID,
 		"--s3-endpoint", a.cfg.S3Endpoint,
-		"--s3-bucket", a.cfg.S3Bucket,
+		"--s3-bucket", layout.Bucket,
 		"--s3-region", a.cfg.S3Region,
 	}
 

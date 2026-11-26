@@ -14,6 +14,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/domain"
 	"github.com/anuragxxd/conquest/internal/objstore"
 	"github.com/anuragxxd/conquest/internal/repository"
+	"github.com/anuragxxd/conquest/internal/runbucket"
 	"github.com/anuragxxd/conquest/internal/storage"
 )
 
@@ -69,6 +70,7 @@ type RunController struct {
 	runBackend  backend.RunBackend  // nil if no runner backend configured
 	taskBackend backend.TaskBackend // nil if no task backend configured
 	artifacts   objstore.Client
+	runBuckets  runbucket.Provisioner // nil: every run uses layout.Bucket
 	log         *slog.Logger
 }
 
@@ -107,6 +109,13 @@ func (c *RunController) SetArtifactStore(store objstore.Client) {
 	c.artifacts = store
 }
 
+// SetRunBuckets configures where each new run's objects live and which
+// credentials its runner gets (internal/runbucket). Without it, every run
+// uses the layout's bucket and the run backend's configured Secret.
+func (c *RunController) SetRunBuckets(p runbucket.Provisioner) {
+	c.runBuckets = p
+}
+
 // Layout returns the storage layout used by this controller.
 func (c *RunController) Layout() storage.Layout {
 	return c.layout
@@ -141,6 +150,19 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	}
 
 	runID := domain.NewID()
+	layout, storageSecret, err := c.ensureRunBucket(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	// Until the run is created, a failure leaves nothing that refers to the
+	// run's bucket: delete it again.
+	created := false
+	defer func() {
+		if !created {
+			c.deleteRunBucket(runID)
+		}
+	}()
+
 	prepared, err := runAdapter.PrepareRun(runID, adapter.SubmissionRequest{
 		WorkflowType:             req.WorkflowType,
 		WorkflowTypeVersion:      req.WorkflowTypeVersion,
@@ -150,10 +172,11 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 		WorkflowEngineVersion:    req.WorkflowEngineVersion,
 		WorkflowEngineParameters: req.WorkflowEngineParameters,
 		Tags:                     req.Tags,
-	}, c.layout)
+	}, layout)
 	if err != nil {
 		return nil, err
 	}
+	prepared.RunnerSpec.StorageSecretName = storageSecret
 
 	run := domain.NewRunWithID(
 		runID,
@@ -163,16 +186,17 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 		prepared.WorkflowEngineVersion,
 		prepared.RequestPayload,
 		"", // set below
-		c.layout.CurrentVersion(),
+		layout.CurrentVersion(),
 		"", // set below
 	)
-	run.OutputPrefix = c.layout.OutputsDirURI(run.RunID)
-	run.RunRootURI = c.layout.RunRootURI(run.RunID)
+	run.OutputPrefix = layout.OutputsDirURI(run.RunID)
+	run.RunRootURI = layout.RunRootURI(run.RunID)
 	run.ResolvedWorkflowRef = prepared.ResolvedWorkflowRef
 
 	if err := c.runs.Create(ctx, run); err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
 	}
+	created = true
 
 	event := domain.NewEvent(run.RunID, "", domain.EventRunCreated, prepared.RequestPayload)
 	if err := c.events.Append(ctx, event); err != nil {
@@ -232,6 +256,38 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	)
 	return run, nil
 }
+
+// ensureRunBucket returns the layout of a new run's objects and the Secret
+// with its runner's S3 credentials ("" for the run backend's own).
+func (c *RunController) ensureRunBucket(ctx context.Context, runID string) (storage.Layout, string, error) {
+	layout := c.layout
+	if c.runBuckets == nil {
+		return layout, "", nil
+	}
+	bucket, err := c.runBuckets.Ensure(ctx, runID)
+	if err != nil {
+		c.deleteRunBucket(runID)
+		return storage.Layout{}, "", fmt.Errorf("provision run bucket: %w", err)
+	}
+	layout.Bucket = bucket.Name
+	return layout, bucket.SecretName, nil
+}
+
+// deleteRunBucket deletes the bucket of a run that was not created, best
+// effort and on its own context: the failed request's may be done already.
+func (c *RunController) deleteRunBucket(runID string) {
+	if c.runBuckets == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runBucketCleanupTimeout)
+	defer cancel()
+	if err := c.runBuckets.Delete(ctx, runID); err != nil {
+		c.log.Error("failed to delete the bucket of a run that was not created", "run_id", runID, "err", err)
+	}
+}
+
+// runBucketCleanupTimeout bounds deleteRunBucket.
+const runBucketCleanupTimeout = 30 * time.Second
 
 // GetRun returns the full run and a task-logs URL.
 func (c *RunController) GetRun(ctx context.Context, runID string) (*RunLog, error) {

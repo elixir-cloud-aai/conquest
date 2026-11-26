@@ -21,7 +21,6 @@ type SnakemakeRunAdapterConfig struct {
 	DefaultDiskMB         int
 	InternalBaseURL       string
 	S3Endpoint            string
-	S3Bucket              string
 	S3Region              string
 }
 
@@ -144,7 +143,7 @@ func (a *SnakemakeRunAdapter) PrepareRun(runID string, req SubmissionRequest, la
 		"--run-log-key", layout.RunLog(runID),
 		"--internal-tes-base", strings.TrimRight(a.cfg.InternalBaseURL, "/") + "/internal/runs/" + runID,
 		"--s3-endpoint", a.cfg.S3Endpoint,
-		"--s3-bucket", a.cfg.S3Bucket,
+		"--s3-bucket", layout.Bucket,
 		"--s3-region", a.cfg.S3Region,
 		"--jobs", fmt.Sprintf("%d", jobs),
 		"--default-disk-mb", fmt.Sprintf("%d", a.cfg.DefaultDiskMB),
