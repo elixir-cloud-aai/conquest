@@ -140,7 +140,7 @@ func TestGetRun_LoadsWorkflowOutputsForWDL(t *testing.T) {
 type runAdapterStub struct {
 	prepared *adapter.PreparedRun
 	err      error
-	called   bool
+	calls    int
 	layout   storage.Layout
 	// failInBucketPrefix fails PrepareRun for layouts whose bucket has
 	// this prefix.
@@ -150,7 +150,7 @@ type runAdapterStub struct {
 func (s *runAdapterStub) Name() string { return "nextflow" }
 
 func (s *runAdapterStub) PrepareRun(_ string, _ adapter.SubmissionRequest, layout storage.Layout) (*adapter.PreparedRun, error) {
-	s.called = true
+	s.calls++
 	s.layout = layout
 	if s.failInBucketPrefix != "" && strings.HasPrefix(layout.Bucket, s.failInBucketPrefix) {
 		return nil, errors.New("prepare failed")

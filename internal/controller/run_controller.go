@@ -207,7 +207,7 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 
 	keepBucket = true
 	if err := c.runs.Create(ctx, run); err != nil {
-		if c.runBuckets != nil {
+		if layout.Bucket != c.layout.Bucket {
 			c.log.Warn("run may not have been stored; its bucket is kept", "run_id", runID, "bucket", layout.Bucket)
 		}
 		return nil, fmt.Errorf("create run: %w", err)

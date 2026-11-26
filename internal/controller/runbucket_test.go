@@ -180,3 +180,24 @@ func TestSubmitRun_KeepsTheBucketOfACreatedRunWhoseRunnerFailed(t *testing.T) {
 		t.Fatalf("deleted buckets %v of a created run", buckets.deleted)
 	}
 }
+
+// With the shared bucket the run is prepared once: the server's layout is
+// already the run's.
+func TestSubmitRun_SharedBucketPreparesTheRunOnce(t *testing.T) {
+	shared, err := runbucket.NewShared("conquest", "storage-secrets")
+	if err != nil {
+		t.Fatalf("NewShared: %v", err)
+	}
+	runAdapter := &runAdapterStub{prepared: preparedNextflowRun()}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+
+	if _, err := runBucketsController(&runStoreStub{}, runAdapter, runBackend, shared).SubmitRun(context.Background(), nextflowRequest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if runAdapter.calls != 1 {
+		t.Fatalf("PrepareRun calls = %d, want 1", runAdapter.calls)
+	}
+	if runBackend.spec == nil || runBackend.spec.StorageSecretName != "storage-secrets" {
+		t.Fatalf("runner spec = %+v, want Secret storage-secrets", runBackend.spec)
+	}
+}
