@@ -181,6 +181,46 @@ func TestSubmitRun_KeepsTheBucketOfACreatedRunWhoseRunnerFailed(t *testing.T) {
 	}
 }
 
+// fixedBucketStub returns the same bucket for every run.
+type fixedBucketStub struct {
+	bucket  runbucket.Bucket
+	deleted []string
+}
+
+func (s *fixedBucketStub) Ensure(context.Context, string) (runbucket.Bucket, error) {
+	return s.bucket, nil
+}
+
+func (s *fixedBucketStub) Delete(_ context.Context, runID string) error {
+	s.deleted = append(s.deleted, runID)
+	return nil
+}
+
+// A provisioner result without a bucket or Secret fails closed: the runner
+// must never fall back to the bucket-wide Secret.
+func TestSubmitRun_RefusesAnIncompleteBucket(t *testing.T) {
+	for name, bucket := range map[string]runbucket.Bucket{
+		"no Secret": {Name: "conquest-run-x"},
+		"no bucket": {SecretName: "conquest-run-x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runs := &runStoreStub{}
+			runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+			buckets := &fixedBucketStub{bucket: bucket}
+
+			if _, err := runBucketsController(runs, &runAdapterStub{prepared: preparedNextflowRun()}, runBackend, buckets).SubmitRun(context.Background(), nextflowRequest); err == nil {
+				t.Fatal("expected an error")
+			}
+			if runs.createRun != nil || runBackend.spec != nil {
+				t.Fatal("run was persisted or submitted with an incomplete bucket")
+			}
+			if len(buckets.deleted) != 1 {
+				t.Fatalf("deleted %v, want the run's bucket deleted", buckets.deleted)
+			}
+		})
+	}
+}
+
 // With the shared bucket the run is prepared once: the server's layout is
 // already the run's.
 func TestSubmitRun_SharedBucketPreparesTheRunOnce(t *testing.T) {

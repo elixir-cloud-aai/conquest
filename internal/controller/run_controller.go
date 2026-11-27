@@ -283,6 +283,10 @@ func (c *RunController) ensureRunBucket(ctx context.Context, runID string) (stor
 	if err != nil {
 		return storage.Layout{}, "", fmt.Errorf("provision run bucket: %w", err)
 	}
+	// Fail closed: without a Secret, the runner would get the bucket-wide one.
+	if bucket.Name == "" || bucket.SecretName == "" {
+		return storage.Layout{}, "", fmt.Errorf("provision run bucket: provisioner returned no bucket or no Secret for run %s", runID)
+	}
 	layout.Bucket = bucket.Name
 	return layout, bucket.SecretName, nil
 }
