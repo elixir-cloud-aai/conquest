@@ -59,3 +59,14 @@ Service account name.
 {{- default "default" .Values.conquest.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Service account of the runner and task pods (no Role bound, no token).
+*/}}
+{{- define "conquest.podServiceAccountName" -}}
+{{- if .Values.conquest.podServiceAccount.create }}
+{{- default (printf "%s-pods" (include "conquest.fullname" . | trunc 58 | trimSuffix "-")) .Values.conquest.podServiceAccount.name }}
+{{- else }}
+{{- default "default" .Values.conquest.podServiceAccount.name }}
+{{- end }}
+{{- end }}

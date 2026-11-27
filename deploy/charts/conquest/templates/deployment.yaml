@@ -129,6 +129,12 @@ spec:
             - name: CONQUEST_K8S_NAMESPACE
               value: {{ .Release.Namespace | quote }}
             {{- end }}
+            {{- if not .Values.conquest.env.CONQUEST_SERVICE_ACCOUNT }}
+            # Runner and task pods run as their own ServiceAccount, never the
+            # server's.
+            - name: CONQUEST_SERVICE_ACCOUNT
+              value: {{ include "conquest.podServiceAccountName" . | quote }}
+            {{- end }}
             - name: CONQUEST_INTERNAL_BASE_URL
               value: {{ include "conquest.internalBaseURL" . | quote }}
             - name: DATABASE_HOST
@@ -250,8 +256,33 @@ spec:
             - name: CONQUEST_STORAGE_ISOLATION
               value: "true"
             {{- end }}
+            {{- $runBuckets := .Values.storageIsolation.runBuckets | default "shared" }}
             - name: CONQUEST_RUN_BUCKETS
-              value: {{ .Values.storageIsolation.runBuckets | default "shared" | quote }}
+              value: {{ $runBuckets | quote }}
+            {{- if eq $runBuckets "obc" }}
+            {{- /* the server refuses these too; fail at render time already */}}
+            {{- if not .Values.storageIsolation.enabled }}
+            {{- fail "storageIsolation.runBuckets obc needs storageIsolation.enabled: without it, task pods get the bucket-wide S3 credentials" }}
+            {{- end }}
+            {{- if eq .Values.conquest.workspace.mode "objectfs" }}
+            {{- fail "storageIsolation.runBuckets obc doesn't work with conquest.workspace.mode objectfs: it mounts the configured bucket" }}
+            {{- end }}
+            {{- $obc := .Values.storageIsolation.obc | default dict }}
+            - name: CONQUEST_RUN_BUCKETS_OBC_STORAGE_CLASS
+              value: {{ required "storageIsolation.obc.storageClassName is required with runBuckets obc" $obc.storageClassName | quote }}
+            {{- with $obc.maxSize }}
+            - name: CONQUEST_RUN_BUCKETS_OBC_MAX_SIZE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $obc.maxObjects }}
+            - name: CONQUEST_RUN_BUCKETS_OBC_MAX_OBJECTS
+              value: {{ . | int64 | quote }}
+            {{- end }}
+            {{- with $obc.bindTimeout }}
+            - name: CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             - name: CONQUEST_RUNNER_SECRET
               valueFrom:
                 secretKeyRef:

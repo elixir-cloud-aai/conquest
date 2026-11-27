@@ -22,6 +22,18 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["create", "get", "list", "watch", "delete"]
+  {{- if eq (.Values.storageIsolation.runBuckets | default "shared") "obc" }}
+  # Run buckets (obc): one ObjectBucketClaim per run, and the Secret and
+  # ConfigMap the bucket provisioner creates for it (bucket name and keys).
+  # RBAC can't limit get by a name prefix, so the server may read every
+  # Secret in the namespace; runner and task pods have no token.
+  - apiGroups: ["objectbucket.io"]
+    resources: ["objectbucketclaims"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
