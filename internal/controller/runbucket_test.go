@@ -32,6 +32,10 @@ func (s *runBucketsStub) Ensure(_ context.Context, runID string) (runbucket.Buck
 	return runbucket.Bucket{Name: "conquest-run-" + runID, SecretName: "conquest-run-" + runID}, nil
 }
 
+func (s *runBucketsStub) Credentials(context.Context, string) (runbucket.Credentials, error) {
+	return runbucket.Credentials{}, errors.New("not used")
+}
+
 func (s *runBucketsStub) Delete(_ context.Context, runID string) error {
 	s.deleted = append(s.deleted, runID)
 	return nil
@@ -189,6 +193,10 @@ type fixedBucketStub struct {
 
 func (s *fixedBucketStub) Ensure(context.Context, string) (runbucket.Bucket, error) {
 	return s.bucket, nil
+}
+
+func (s *fixedBucketStub) Credentials(context.Context, string) (runbucket.Credentials, error) {
+	return runbucket.Credentials{}, errors.New("not used")
 }
 
 func (s *fixedBucketStub) Delete(_ context.Context, runID string) error {

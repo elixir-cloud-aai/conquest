@@ -16,16 +16,23 @@
 // The Shared provisioner keeps today's behaviour: every run uses the one
 // configured bucket, under its run root, with the bucket-wide credentials.
 //
-// Known limit: so far only the runner and the run's root follow the run's
-// bucket. The server's own reads and writes (outputs, logs, the storage
-// gateway) and task pods still use the configured bucket, so a provisioner
-// that returns another bucket needs them to follow first.
+// The server reaches a run's objects (workflow outputs, the storage
+// gateway's presigned URLs and listings) in the run's bucket with the run's
+// credentials (Access). A run's bucket is the host of its stored run root
+// URI, so a run keeps its bucket when the provisioner changes.
+//
+// Task pods follow the run's bucket only through the storage gateway, and
+// the objectfs workspace mounts the configured bucket: a provisioner that
+// gives runs their own buckets needs storage isolation and another workspace
+// mode (CheckDeployment).
 package runbucket
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"strings"
 )
 
@@ -37,6 +44,29 @@ type Mode string
 
 // ModeShared puts every run into the one configured bucket (the default).
 const ModeShared Mode = "shared"
+
+// PerRun reports whether the mode can give a run a bucket other than the
+// configured one.
+func (m Mode) PerRun() bool {
+	return m != ModeShared
+}
+
+// CheckDeployment refuses settings with which a run's own bucket would leak
+// or be missed: without storage isolation, task pods get the bucket-wide S3
+// credentials; the objectfs workspace mounts the configured bucket with the
+// bucket-wide CSI Secret.
+func CheckDeployment(mode Mode, storageIsolation bool, workspaceMode string) error {
+	if !mode.PerRun() {
+		return nil
+	}
+	if !storageIsolation {
+		return fmt.Errorf("%s=%s needs CONQUEST_STORAGE_ISOLATION=true: without it, task pods get the bucket-wide S3 credentials", EnvMode, mode)
+	}
+	if workspaceMode == "objectfs" {
+		return fmt.Errorf("%s=%s doesn't work with CONQUEST_WORKSPACE_MODE=objectfs: it mounts the configured bucket with the bucket-wide CSI Secret", EnvMode, mode)
+	}
+	return nil
+}
 
 // ParseMode parses the value of EnvMode. Empty means ModeShared.
 func ParseMode(v string) (Mode, error) {
@@ -59,12 +89,54 @@ type Bucket struct {
 	SecretName string
 }
 
+// Credentials are S3 keys. They format and log without the secret key.
+type Credentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+}
+
+// Empty reports whether either key is missing.
+func (c Credentials) Empty() bool {
+	return c.AccessKeyID == "" || c.SecretAccessKey == ""
+}
+
+// String hides the secret key from fmt's %v and %s.
+func (c Credentials) String() string {
+	return fmt.Sprintf("{AccessKeyID:%s SecretAccessKey:REDACTED}", c.AccessKeyID)
+}
+
+// GoString hides the secret key from fmt's %#v.
+func (c Credentials) GoString() string {
+	return "runbucket.Credentials" + c.String()
+}
+
+// LogValue hides the secret key from log/slog.
+func (c Credentials) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("access_key_id", c.AccessKeyID),
+		slog.String("secret_access_key", "REDACTED"),
+	)
+}
+
+// BucketOf returns the bucket of a stored run root URI,
+// s3://<bucket>/<version>/workflow-runs/<run ID>/.
+func BucketOf(runRootURI string) (string, error) {
+	u, err := url.Parse(runRootURI)
+	if err != nil || u.Scheme != "s3" || u.Host == "" {
+		return "", fmt.Errorf("run root %q is not an s3://<bucket>/ URI", runRootURI)
+	}
+	return u.Host, nil
+}
+
 // Provisioner gives runs their buckets.
 type Provisioner interface {
 	// Ensure returns the run's bucket, creating it first where the
 	// provisioner creates buckets. Calling it again for the same run returns
 	// the same bucket.
 	Ensure(ctx context.Context, runID string) (Bucket, error)
+	// Credentials returns the S3 keys for the run's bucket, as in the Secret
+	// its runner gets, for the server's own reads and writes there.
+	Credentials(ctx context.Context, runID string) (Credentials, error)
 	// Delete removes what Ensure created for the run, data included. It
 	// succeeds if there is nothing to remove.
 	Delete(ctx context.Context, runID string) error
@@ -73,6 +145,7 @@ type Provisioner interface {
 // Shared is the Provisioner for one bucket that all runs share.
 type Shared struct {
 	bucket Bucket
+	creds  Credentials
 }
 
 var _ Provisioner = (*Shared)(nil)
@@ -95,6 +168,19 @@ func (s *Shared) Ensure(_ context.Context, runID string) (Bucket, error) {
 		return Bucket{}, errors.New("shared run bucket: run ID is required")
 	}
 	return s.bucket, nil
+}
+
+// SetCredentials sets the keys Credentials returns: the server's own.
+func (s *Shared) SetCredentials(c Credentials) {
+	s.creds = c
+}
+
+// Credentials returns the server's keys for the shared bucket.
+func (s *Shared) Credentials(context.Context, string) (Credentials, error) {
+	if s.creds.Empty() {
+		return Credentials{}, errors.New("shared run bucket: no S3 credentials configured")
+	}
+	return s.creds, nil
 }
 
 // Delete does nothing: the shared bucket belongs to every run, and Ensure
