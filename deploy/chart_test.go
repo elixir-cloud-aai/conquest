@@ -268,7 +268,8 @@ func TestChart_OBCRunBuckets(t *testing.T) {
 	}
 	rules := roleRules(t, objs)
 	for _, want := range []string{
-		"objectbucket.io/objectbucketclaims:create,get,delete",
+		// list: the run retention's sweep for claims without a run
+		"objectbucket.io/objectbucketclaims:create,get,list,delete",
 		"/secrets:get",
 		"/configmaps:get",
 	} {
@@ -287,6 +288,20 @@ func TestChart_OBCRunBuckets(t *testing.T) {
 		if _, ok := env[k]; ok {
 			t.Errorf("%s set without a value", k)
 		}
+	}
+}
+
+func TestChart_RunRetentionIsOffByDefault(t *testing.T) {
+	env := serverEnv(t, mustRender(t))
+	if v, ok := env["CONQUEST_RUN_RETENTION"]; ok {
+		t.Errorf("CONQUEST_RUN_RETENTION = %q by default, want unset (off)", v)
+	}
+}
+
+func TestChart_RunRetention(t *testing.T) {
+	env := serverEnv(t, mustRender(t, "runRetention=720h"))
+	if env["CONQUEST_RUN_RETENTION"] != "720h" {
+		t.Errorf("CONQUEST_RUN_RETENTION = %q, want 720h", env["CONQUEST_RUN_RETENTION"])
 	}
 }
 

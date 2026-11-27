@@ -256,6 +256,14 @@ storageIsolation:
     # 20s (the WES request waits for it). Empty: 20s.
     bindTimeout: ""
 
+# Run retention (CONQUEST_RUN_RETENTION, README: Run retention): a run's data
+# (its objects, or with runBuckets obc its own bucket, non-empty included) is
+# deleted automatically once the run has ended longer ago than this Go
+# duration; the run itself still lists. Needs CONQUEST_S3_ENDPOINT. Empty:
+# off, nothing is deleted. Turning it on deletes the data of every run that
+# ended longer ago at the first sweep.
+runRetention: ""   # e.g. 720h (30 days)
+
 # Runner callback authentication: each runner pod gets its run's runner
 # token (env CONQUEST_RUNNER_TOKEN, derived from this secret and the run ID),
 # and the runner callback API (/internal/runs/<run ID>/...) accepts only that

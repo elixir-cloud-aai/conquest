@@ -26,10 +26,11 @@ rules:
   # Run buckets (obc): one ObjectBucketClaim per run, and the Secret and
   # ConfigMap the bucket provisioner creates for it (bucket name and keys).
   # RBAC can't limit get by a name prefix, so the server may read every
-  # Secret in the namespace; runner and task pods have no token.
+  # Secret in the namespace; runner and task pods have no token. list: run
+  # retention finds the claims whose run was never stored.
   - apiGroups: ["objectbucket.io"]
     resources: ["objectbucketclaims"]
-    verbs: ["create", "get", "delete"]
+    verbs: ["create", "get", "list", "delete"]
   - apiGroups: [""]
     resources: ["secrets", "configmaps"]
     verbs: ["get"]
