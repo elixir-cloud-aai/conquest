@@ -79,3 +79,31 @@ type EventStore interface {
 	Append(ctx context.Context, event *domain.Event) error
 	ListByRunID(ctx context.Context, runID string) ([]*domain.Event, error)
 }
+
+// RunCursor is a keyset position in runs ordered by finished_at and run ID;
+// the zero value is the start.
+type RunCursor struct {
+	FinishedAt time.Time
+	RunID      string
+}
+
+// RetentionStore finds the runs whose data has expired and records that
+// their data is gone (package retention). It ignores run ownership.
+type RetentionStore interface {
+	// ListExpiredRuns returns up to limit terminal runs that finished before
+	// finishedBefore and still have their data, ordered by finished_at and
+	// run ID, after the cursor.
+	ListExpiredRuns(ctx context.Context, finishedBefore time.Time, after RunCursor, limit int) ([]*domain.Run, error)
+	// SetDataDeleted records that the run's data is gone.
+	SetDataDeleted(ctx context.Context, runID string) error
+	// Get reads a run.
+	Get(ctx context.Context, runID string) (*domain.Run, error)
+}
+
+// Leases hands out leases of cluster-wide background jobs, so that one
+// server replica at a time runs each job.
+type Leases interface {
+	// Claim takes the lease name for holder for ttl, if it is free, expired
+	// or holder's already, and reports whether holder holds it now.
+	Claim(ctx context.Context, name, holder string, ttl time.Duration) (bool, error)
+}

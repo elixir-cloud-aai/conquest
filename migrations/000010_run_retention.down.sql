@@ -1,0 +1,7 @@
+BEGIN;
+
+DROP TABLE IF EXISTS leases;
+DROP INDEX IF EXISTS idx_runs_retention;
+ALTER TABLE runs DROP COLUMN IF EXISTS data_deleted_at;
+
+COMMIT;
