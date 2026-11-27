@@ -82,7 +82,7 @@ jobs:
 
       # Same migrate version as the server image (docker/server/Dockerfile)
       - name: Install migrate
-        run: go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.17.0
+        run: go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
 
       - name: Migrate up, down one step and up again
         run: |
