@@ -23,7 +23,10 @@
 // credentials (internal/isolation): SetBound confines every task to a
 // prefix, such as its run's root, on top of its request; SetLister lets a
 // GET of a prefix URL (key ending in "/") below a DIRECTORY input list the
-// keys there. Without them, the gateway behaves as described above.
+// keys there. A third, SetRunStorage, serves each task only its run's bucket
+// and presigns there with the run's credentials (internal/runbucket), for
+// runs with buckets of their own. Without them, the gateway behaves as
+// described above.
 package storagegw
 
 import (
@@ -71,6 +74,15 @@ type Lister interface {
 // must lie under, whatever its request names; "" allows nothing.
 type Bound func(ctx context.Context, task *domain.Task) (string, error)
 
+// RunStore presigns and lists in one bucket, with that bucket's credentials.
+type RunStore interface {
+	Presigner
+	Lister
+}
+
+// RunStorage returns the bucket of a task's run and the store for it.
+type RunStorage func(ctx context.Context, task *domain.Task) (bucket string, store RunStore, err error)
+
 // Config configures the gateway.
 type Config struct {
 	// PublicURL is the gateway's base URL as remote endpoints reach it,
@@ -78,7 +90,8 @@ type Config struct {
 	PublicURL string
 	// Secret signs capability URLs; at least 32 bytes.
 	Secret []byte
-	// Buckets the gateway serves; requests for others are refused.
+	// Buckets the gateway serves; requests for others are refused. With
+	// SetRunStorage, each task's run's bucket replaces them.
 	Buckets []string
 	// PresignExpiry bounds each redirect's presigned URL (default 15m).
 	PresignExpiry time.Duration
@@ -94,6 +107,7 @@ type Gateway struct {
 	presign Presigner
 	lister  Lister
 	bound   Bound
+	runs    RunStorage
 	log     *slog.Logger
 	now     func() time.Time
 }
@@ -129,6 +143,12 @@ func (g *Gateway) SetBound(bound Bound) { g.bound = bound }
 // SetLister enables listings: a GET of a prefix URL below one of the task's
 // DIRECTORY inputs answers {"keys": [...]} instead of a redirect.
 func (g *Gateway) SetLister(l Lister) { g.lister = l }
+
+// SetRunStorage serves each task only its run's bucket, and presigns and
+// lists there with the store rs returns (the run's credentials) instead of
+// the presigner and lister of New and SetLister. Listings stay off without
+// SetLister.
+func (g *Gateway) SetRunStorage(rs RunStorage) { g.runs = rs }
 
 // URL returns the capability URL through which a task reaches an object
 // or, with a key ending in "/", a prefix.
@@ -182,8 +202,8 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "task has ended", http.StatusGone)
 		return
 	}
-	if !contains(g.cfg.Buckets, bucket) {
-		http.Error(w, "bucket not served", http.StatusForbidden)
+	presign, lister, ok := g.storeFor(w, r, task, bucket)
+	if !ok {
 		return
 	}
 	if !g.withinBound(r.Context(), task, bucket, key) {
@@ -197,8 +217,8 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "task request unreadable", http.StatusInternalServerError)
 		return
 	}
-	if g.lister != nil && r.Method == http.MethodGet && strings.HasSuffix(key, "/") {
-		g.list(w, r, taskID, scope, bucket, key)
+	if lister != nil && r.Method == http.MethodGet && strings.HasSuffix(key, "/") {
+		g.list(w, r, lister, taskID, scope, bucket, key)
 		return
 	}
 	write := r.Method == http.MethodPut
@@ -207,7 +227,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "object not in the task's inputs or outputs", http.StatusForbidden)
 		return
 	}
-	target, err := g.presign.Presign(r.Context(), r.Method, bucket, key, g.cfg.PresignExpiry)
+	target, err := presign.Presign(r.Context(), r.Method, bucket, key, g.cfg.PresignExpiry)
 	if err != nil {
 		g.log.Error("storage gateway: presign failed", "task_id", taskID, "err", err)
 		http.Error(w, "presign failed", http.StatusBadGateway)
@@ -218,6 +238,34 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", target.String())
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusTemporaryRedirect)
+}
+
+// storeFor checks that the task may use bucket and returns the presigner and
+// lister (nil: no listings) for it; otherwise it answers the request.
+func (g *Gateway) storeFor(w http.ResponseWriter, r *http.Request, task *domain.Task, bucket string) (Presigner, Lister, bool) {
+	if g.runs == nil {
+		if !contains(g.cfg.Buckets, bucket) {
+			http.Error(w, "bucket not served", http.StatusForbidden)
+			return nil, nil, false
+		}
+		return g.presign, g.lister, true
+	}
+	runBucket, store, err := g.runs(r.Context(), task)
+	if err != nil {
+		g.log.Error("storage gateway: run storage failed", "task_id", task.TaskID, "err", err)
+		http.Error(w, "run storage unavailable", http.StatusBadGateway)
+		return nil, nil, false
+	}
+	if runBucket == "" || bucket != runBucket {
+		g.log.Warn("storage gateway: not the run's bucket", "task_id", task.TaskID, "bucket", bucket)
+		http.Error(w, "bucket not served", http.StatusForbidden)
+		return nil, nil, false
+	}
+	var lister Lister
+	if g.lister != nil {
+		lister = store
+	}
+	return store, lister, true
 }
 
 // withinBound reports whether bucket/key lies under the task's bound; with
@@ -235,13 +283,13 @@ func (g *Gateway) withinBound(ctx context.Context, task *domain.Task, bucket, ke
 }
 
 // list answers the keys below prefix, which must lie below a DIRECTORY input.
-func (g *Gateway) list(w http.ResponseWriter, r *http.Request, taskID string, s *scope, bucket, prefix string) {
+func (g *Gateway) list(w http.ResponseWriter, r *http.Request, lister Lister, taskID string, s *scope, bucket, prefix string) {
 	if !s.allowsList(bucket, prefix) {
 		g.log.Warn("storage gateway: listing out of scope", "task_id", taskID, "bucket", bucket, "prefix", prefix)
 		http.Error(w, "prefix not below the task's directory inputs", http.StatusForbidden)
 		return
 	}
-	keys, err := g.lister.ListPrefix(r.Context(), bucket, prefix)
+	keys, err := lister.ListPrefix(r.Context(), bucket, prefix)
 	if err != nil {
 		g.log.Error("storage gateway: listing failed", "task_id", taskID, "err", err)
 		http.Error(w, "listing failed", http.StatusBadGateway)

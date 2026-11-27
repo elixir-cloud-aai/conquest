@@ -11,6 +11,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/backend"
 	"github.com/anuragxxd/conquest/internal/backend/remote"
 	"github.com/anuragxxd/conquest/internal/domain"
+	"github.com/anuragxxd/conquest/internal/runbucket"
 )
 
 // RunLookup reads runs; repository.RunStore satisfies it.
@@ -159,6 +160,9 @@ func (b *Backend) runInfo(ctx context.Context, runID string) runInfo {
 		return info
 	}
 	info.Engine = run.WorkflowEngine
+	// a run root that names no bucket leaves Conquest's: the storage
+	// gateway still serves each task only its run's bucket
+	info.Bucket, _ = runbucket.BucketOf(run.RunRootURI)
 	var req struct {
 		Tags map[string]string `json:"tags"`
 	}

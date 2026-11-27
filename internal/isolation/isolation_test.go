@@ -274,6 +274,33 @@ func TestRunBound(t *testing.T) {
 	}
 }
 
+func TestRunBoundIn(t *testing.T) {
+	buckets := map[string]string{"r1": "run-r1", "empty": ""}
+	bound := RunBoundIn(layout, func(_ context.Context, runID string) (string, error) {
+		b, ok := buckets[runID]
+		if !ok {
+			return "", errors.New("unknown run")
+		}
+		return b, nil
+	})
+	for _, tc := range []struct {
+		task    *domain.Task
+		want    string
+		wantErr bool
+	}{
+		{&domain.Task{RunID: "r1"}, "run-r1/v1/workflow-runs/r1/", false},
+		{&domain.Task{RunID: "empty"}, "", false},
+		{&domain.Task{RunID: "unknown"}, "", true},
+		{&domain.Task{}, "", false},
+		{nil, "", false},
+	} {
+		got, err := bound(context.Background(), tc.task)
+		if got != tc.want || (err != nil) != tc.wantErr {
+			t.Errorf("bound(%+v) = %q, %v; want %q (error %v)", tc.task, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
 // errorServer answers every request with the status (and Location) given.
 func errorServer(t *testing.T, status int, location, body string) *Client {
 	t.Helper()

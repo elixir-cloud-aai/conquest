@@ -52,6 +52,8 @@ type Attempt struct {
 type runInfo struct {
 	Engine string
 	Tags   map[string]string
+	// Bucket of the run's objects (internal/runbucket); "" means Conquest's.
+	Bucket string
 }
 
 // taskRequest is the part of a stored TES request routing looks at.
@@ -99,7 +101,7 @@ func (r *router) decide(task *domain.Task, run runInfo, now time.Time) (*Record,
 			return nil, fmt.Errorf("decode stored task: %w", err)
 		}
 	}
-	if reason := r.localOnly(task, &req); reason != "" {
+	if reason := r.localOnly(task, &req, run.Bucket); reason != "" {
 		rec.LocalOnly = reason
 		rec.Candidates = []string{Local}
 		return rec, nil
@@ -168,8 +170,12 @@ func (r *router) applyHint(rec *Record, rule *Rule, candidates, hint []string) [
 }
 
 // localOnly returns why a task can only run on the local backend, or "".
-// Remote endpoints get no shared filesystem and only Conquest's bucket.
-func (r *router) localOnly(task *domain.Task, req *taskRequest) string {
+// Remote endpoints get no shared filesystem and only the run's bucket
+// (Conquest's, unless runBucket names the run's own).
+func (r *router) localOnly(task *domain.Task, req *taskRequest, runBucket string) string {
+	if runBucket == "" {
+		runBucket = r.bucket
+	}
 	if task.Workspace != nil {
 		return "run uses a shared workspace"
 	}
@@ -180,27 +186,27 @@ func (r *router) localOnly(task *domain.Task, req *taskRequest) string {
 		if in.URL == "" {
 			continue // inline content
 		}
-		if reason := r.remoteURL(in.URL, false); reason != "" {
+		if reason := remoteURL(in.URL, false, runBucket); reason != "" {
 			return "input " + reason
 		}
 	}
 	for _, out := range req.Outputs {
-		if reason := r.remoteURL(out.URL, true); reason != "" {
+		if reason := remoteURL(out.URL, true, runBucket); reason != "" {
 			return "output " + reason
 		}
 	}
 	return ""
 }
 
-func (r *router) remoteURL(raw string, output bool) string {
+func remoteURL(raw string, output bool, bucket string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Sprintf("URL %q is invalid", raw)
 	}
 	switch u.Scheme {
 	case "s3":
-		if u.Host != r.bucket {
-			return fmt.Sprintf("in bucket %q, not Conquest's bucket", u.Host)
+		if u.Host != bucket {
+			return fmt.Sprintf("in bucket %q, not the run's bucket", u.Host)
 		}
 		return ""
 	case "http", "https":

@@ -63,6 +63,20 @@ func setup(t *testing.T, runTags map[string]string) (*Backend, *fakeBackend, *fa
 	return b, local, funnel, tesk
 }
 
+// The run's bucket comes from its stored run root.
+func TestRunInfoTakesTheBucketFromTheRunRoot(t *testing.T) {
+	b, _, _, _ := setup(t, nil)
+	b.runs = fakeRuns{
+		"own":    {RunID: "own", RunRootURI: "s3://run-own/v1/workflow-runs/own/"},
+		"broken": {RunID: "broken", RunRootURI: "v1/workflow-runs/broken/"},
+	}
+	for runID, want := range map[string]string{"own": "run-own", "broken": "", "missing": ""} {
+		if got := b.runInfo(context.Background(), runID).Bucket; got != want {
+			t.Errorf("runInfo(%s).Bucket = %q, want %q", runID, got, want)
+		}
+	}
+}
+
 func record(t *testing.T, task *domain.Task) Record {
 	t.Helper()
 	var rec Record

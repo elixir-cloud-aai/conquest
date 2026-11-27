@@ -151,6 +151,34 @@ func TestTasksThatMustStayLocal(t *testing.T) {
 	}
 }
 
+// A run with its own bucket may go remote with objects in that bucket, and
+// stays local with objects in Conquest's or another run's bucket.
+func TestRunsOwnBucket(t *testing.T) {
+	cfg := testConfig(func(c *Config) {
+		c.Routing.Rules = []Rule{{Name: "everything", Backends: []string{"funnel-a"}, NoLocalFallback: true}}
+	})
+	run := runInfo{Bucket: "run-r1"}
+	for name, tc := range map[string]struct {
+		payload string
+		reason  string // "": may go remote
+	}{
+		"own bucket":           {`{"inputs": [{"url": "s3://run-r1/v1/workflow-runs/r1/x", "path": "/x"}]}`, ""},
+		"Conquest's bucket":    {`{"inputs": [{"url": "s3://conquest/v1/workflow-runs/r1/x", "path": "/x"}]}`, `bucket "conquest"`},
+		"another run's bucket": {`{"outputs": [{"url": "s3://run-r2/v1/workflow-runs/r2/x", "path": "/x"}]}`, `bucket "run-r2"`},
+	} {
+		rec := decide(t, cfg, taskWith(tc.payload), run)
+		if tc.reason == "" {
+			if rec.LocalOnly != "" || !slices.Equal(rec.Candidates, []string{"funnel-a"}) {
+				t.Errorf("%s: record = %+v, want funnel-a", name, rec)
+			}
+			continue
+		}
+		if !slices.Equal(rec.Candidates, []string{Local}) || !strings.Contains(rec.LocalOnly, tc.reason) {
+			t.Errorf("%s: record = %+v, want local only (%s)", name, rec, tc.reason)
+		}
+	}
+}
+
 func TestHintWithoutRuleSelectsClientSelectableEndpoints(t *testing.T) {
 	run := runInfo{Tags: map[string]string{HintTag: "tesk-b, funnel-a, nope"}}
 
