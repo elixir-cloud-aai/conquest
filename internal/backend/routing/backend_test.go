@@ -74,13 +74,13 @@ func TestRunInfoTakesTheBucketFromTheRunRoot(t *testing.T) {
 	}
 	for runID, want := range map[string]runInfo{
 		"own":     {Bucket: "run-own"},
-		"broken":  {BadRoot: true},
+		"broken":  {NoBucket: "run root names no bucket"},
 		"stub":    {},
-		"missing": {},
+		"missing": {NoBucket: "run's bucket unknown: run lookup failed"},
 	} {
 		got := b.runInfo(context.Background(), runID)
-		if got.Bucket != want.Bucket || got.BadRoot != want.BadRoot {
-			t.Errorf("runInfo(%s) = %+v, want bucket %q, bad root %v", runID, got, want.Bucket, want.BadRoot)
+		if got.Bucket != want.Bucket || got.NoBucket != want.NoBucket {
+			t.Errorf("runInfo(%s) = %+v, want bucket %q, no bucket %q", runID, got, want.Bucket, want.NoBucket)
 		}
 	}
 }
@@ -94,6 +94,19 @@ func TestBadRunRootStaysLocal(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	if rec := record(t, task); len(local.submitted) != 1 || !strings.Contains(rec.LocalOnly, "run root") {
+		t.Fatalf("record = %+v, local submissions %d", rec, len(local.submitted))
+	}
+}
+
+// Tasks of a run that can't be read stay local.
+func TestUnreadableRunStaysLocal(t *testing.T) {
+	b, local, _, _ := setup(t, map[string]string{DataClassTag: "public"})
+	task := taskWith(nfTask)
+	task.RunID = "missing"
+	if err := b.Submit(context.Background(), task); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if rec := record(t, task); len(local.submitted) != 1 || !strings.Contains(rec.LocalOnly, "lookup failed") {
 		t.Fatalf("record = %+v, local submissions %d", rec, len(local.submitted))
 	}
 }

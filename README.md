@@ -343,7 +343,8 @@ in `CONQUEST_S3_BUCKET`, the server's own):
   gateway answers `502`.
 - Task routing: a task may go to a remote endpoint only with `s3://` inputs
   and outputs in its run's bucket (otherwise its route record says "not the
-  run's bucket"); tasks of a run whose run root names no bucket stay local.
+  run's bucket"); tasks of a run that can't be read, or whose run root names no
+  bucket, stay local.
 
 Task pods reach a run's own bucket only through the storage gateway, the
 objectfs workspace mounts `CONQUEST_S3_BUCKET`, and remote endpoints with

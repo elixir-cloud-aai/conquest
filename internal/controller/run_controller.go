@@ -137,8 +137,9 @@ func (c *RunController) Layout() storage.Layout {
 }
 
 // LayoutOf returns the layout of a run's objects: the controller's, in the
-// bucket of the run's stored run root. Runs without a readable run root get
-// the controller's layout.
+// bucket of the run's stored run root and with the run's stored layout
+// version. Runs without a readable run root get the controller's bucket,
+// runs without a stored version the controller's version.
 func (c *RunController) LayoutOf(run *domain.Run) storage.Layout {
 	layout := c.layout
 	if run == nil {
@@ -146,6 +147,9 @@ func (c *RunController) LayoutOf(run *domain.Run) storage.Layout {
 	}
 	if bucket, err := runbucket.BucketOf(run.RunRootURI); err == nil {
 		layout.Bucket = bucket
+	}
+	if run.LayoutVersion != "" {
+		layout.Version = run.LayoutVersion
 	}
 	return layout
 }

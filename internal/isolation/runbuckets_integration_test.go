@@ -160,10 +160,11 @@ func TestRunBuckets(t *testing.T) {
 		}
 	}
 	_, clientA, _ := access.Client(ctx, "a")
+	// the denial may come from Get or, for a lazy body, from the first read
 	if r, err := clientA.Get(ctx, "isolation-run-b", rootB+"secret.txt"); err == nil {
-		data, _ := io.ReadAll(r)
+		data, readErr := io.ReadAll(r)
 		_ = r.Close()
-		if len(data) > 0 {
+		if readErr == nil {
 			t.Fatalf("run a's client read run b's bucket: %q", data)
 		}
 	}

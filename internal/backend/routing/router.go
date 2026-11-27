@@ -54,8 +54,9 @@ type runInfo struct {
 	Tags   map[string]string
 	// Bucket of the run's objects (internal/runbucket); "" means Conquest's.
 	Bucket string
-	// BadRoot marks a run root that names no bucket: its tasks stay local.
-	BadRoot bool
+	// NoBucket says why the run's bucket is unknown (the run can't be read,
+	// or its run root names no bucket); if set, the run's tasks stay local.
+	NoBucket string
 }
 
 // taskRequest is the part of a stored TES request routing looks at.
@@ -104,8 +105,8 @@ func (r *router) decide(task *domain.Task, run runInfo, now time.Time) (*Record,
 		}
 	}
 	reason := r.localOnly(task, &req, run.Bucket)
-	if run.BadRoot {
-		reason = "run root names no bucket"
+	if run.NoBucket != "" {
+		reason = run.NoBucket
 	}
 	if reason != "" {
 		rec.LocalOnly = reason

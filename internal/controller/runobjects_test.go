@@ -123,6 +123,10 @@ func TestLayoutOf(t *testing.T) {
 			t.Errorf("LayoutOf(%q) = %+v, want bucket %s", root, got, want)
 		}
 	}
+	old := ctrl.LayoutOf(&domain.Run{RunID: "a", LayoutVersion: "v0"})
+	if old.Version != "v0" || old.Bucket != "conquest" {
+		t.Errorf("LayoutOf(stored version v0) = %+v, want version v0", old)
+	}
 	if got := ctrl.LayoutOf(nil); got.Bucket != "conquest" {
 		t.Errorf("LayoutOf(nil) = %+v", got)
 	}
