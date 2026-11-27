@@ -13,7 +13,6 @@ import (
 
 	"github.com/anuragxxd/conquest/internal/domain"
 	"github.com/anuragxxd/conquest/internal/repository"
-	"github.com/anuragxxd/conquest/internal/repository/pg"
 	"github.com/anuragxxd/conquest/internal/runbucket"
 )
 
@@ -92,7 +91,7 @@ func (s *store) Get(_ context.Context, runID string) (*domain.Run, error) {
 	}
 	r, ok := s.runs[runID]
 	if !ok {
-		return nil, pg.ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 	return r, nil
 }
@@ -372,6 +371,20 @@ func TestSweep_OrphanSweepKeepsBucketsWhenItCantReadTheRuns(t *testing.T) {
 	s.SweepOnce(context.Background()) // logs, doesn't panic
 	if len(cl.deleted) != 0 {
 		t.Fatalf("deleted %v", cl.deleted)
+	}
+}
+
+// A sweep whose context ends (shutdown, or its own deadline before the
+// lease expires) deletes no further runs.
+func TestSweep_StopsWithTheContext(t *testing.T) {
+	c := &clock{now: start}
+	st := newStore(finished("old", domain.StateComplete, start.Add(-800*time.Hour)))
+	d := &data{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got := newSweeper(t, st, newLeases(c), d, c, "a").SweepOnce(ctx)
+	if got.Deleted != 0 || len(d.deleted) != 0 || st.runs["old"].DataDeletedAt != nil {
+		t.Fatalf("SweepOnce = %+v, deleted %v; want nothing after the context ended", got, d.deleted)
 	}
 }
 

@@ -408,9 +408,9 @@ Operator requirements:
   `create`, `get`, `list` and `delete` on
   `objectbucketclaims.objectbucket.io` (`list` for run retention's sweep
   for claims without a run) and `get` on `secrets` and `configmaps` (the
-  chart's Role has them with `obc`). RBAC can't limit `get` to a name prefix, so the server may read
-  every Secret in the namespace; runner and task pods have no token, so
-  workflow code can't. Give Conquest a namespace of its own, so that the
+  chart's Role has them with `obc`). RBAC can't limit `get` to a name
+  prefix, so the server may read every Secret in the namespace; runner
+  and task pods have no token, so workflow code can't. Give Conquest a namespace of its own, so that the
   server's account reaches no Secrets of other applications.
 
 [rook-obc]: https://rook.io/docs/rook/latest/Storage-Configuration/Object-Storage-RGW/ceph-object-bucket-claim/

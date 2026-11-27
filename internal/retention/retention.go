@@ -31,7 +31,6 @@ import (
 
 	"github.com/anuragxxd/conquest/internal/domain"
 	"github.com/anuragxxd/conquest/internal/repository"
-	"github.com/anuragxxd/conquest/internal/repository/pg"
 	"github.com/anuragxxd/conquest/internal/runbucket"
 )
 
@@ -68,7 +67,9 @@ type Orphans interface {
 	Delete(ctx context.Context, runID string) error
 }
 
-// Config configures a Sweeper.
+// Config configures a Sweeper. The server sets only Retention
+// (CONQUEST_RUN_RETENTION); it uses the defaults of the rest, which the
+// README documents.
 type Config struct {
 	// Retention is how long a run's data stays after the run ended
 	// (required, above 0).
@@ -224,6 +225,10 @@ func (s *Sweeper) sweepRuns(ctx context.Context, res *Result) {
 			return
 		}
 		last := runs[len(runs)-1]
+		if last.FinishedAt == nil { // the store broke its contract: stop
+			s.log.Error("run retention: expired run without finished_at", "run_id", last.RunID)
+			return
+		}
 		after = repository.RunCursor{FinishedAt: *last.FinishedAt, RunID: last.RunID}
 	}
 }
@@ -270,7 +275,7 @@ func (s *Sweeper) sweepOrphans(ctx context.Context, res *Result) {
 		}
 		run, getErr := s.store.Get(ctx, b.RunID)
 		switch {
-		case errors.Is(getErr, pg.ErrNotFound):
+		case errors.Is(getErr, repository.ErrNotFound):
 		case getErr != nil:
 			s.log.Error("run retention: read the run of a bucket", "run_id", b.RunID, "err", getErr)
 			continue

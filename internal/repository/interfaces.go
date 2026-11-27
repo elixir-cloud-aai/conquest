@@ -7,6 +7,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/anuragxxd/conquest/internal/domain"
@@ -80,6 +81,9 @@ type EventStore interface {
 	ListByRunID(ctx context.Context, runID string) ([]*domain.Event, error)
 }
 
+// ErrNotFound is returned when the requested entity does not exist.
+var ErrNotFound = errors.New("not found")
+
 // RunCursor is a keyset position in runs ordered by finished_at and run ID;
 // the zero value is the start.
 type RunCursor struct {
@@ -92,11 +96,11 @@ type RunCursor struct {
 type RetentionStore interface {
 	// ListExpiredRuns returns up to limit terminal runs that finished before
 	// finishedBefore and still have their data, ordered by finished_at and
-	// run ID, after the cursor.
+	// run ID, after the cursor. Every run returned has FinishedAt set.
 	ListExpiredRuns(ctx context.Context, finishedBefore time.Time, after RunCursor, limit int) ([]*domain.Run, error)
 	// SetDataDeleted records that the run's data is gone.
 	SetDataDeleted(ctx context.Context, runID string) error
-	// Get reads a run.
+	// Get reads a run; a missing run is ErrNotFound.
 	Get(ctx context.Context, runID string) (*domain.Run, error)
 }
 
