@@ -1,6 +1,7 @@
 package wes
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	smkengine "github.com/anuragxxd/conquest/internal/engine/snakemake"
 	wdlengine "github.com/anuragxxd/conquest/internal/engine/wdl"
 	"github.com/anuragxxd/conquest/internal/repository/pg"
+	"github.com/anuragxxd/conquest/internal/storage"
 )
 
 // Handler holds the WES HTTP handlers.
@@ -140,7 +142,7 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 	var req RunRequest
 	_ = json.Unmarshal(run.RequestPayload, &req)
 
-	layout := h.ctrl.Layout()
+	layout := h.ctrl.LayoutOf(run)
 	resp := RunLog{
 		RunID:       run.RunID,
 		Request:     &req,
@@ -225,7 +227,7 @@ func (h *Handler) ListRunTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout := h.ctrl.Layout()
+	layout := h.runLayout(r.Context(), runID)
 	logs := make([]TaskLog, 0, len(result.Tasks))
 	for _, t := range result.Tasks {
 		logs = append(logs, TaskLog{
@@ -255,7 +257,7 @@ func (h *Handler) GetRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout := h.ctrl.Layout()
+	layout := h.runLayout(r.Context(), runID)
 	resp := TaskLog{
 		ID:        task.TaskID,
 		Name:      task.EngineTaskName,
@@ -323,6 +325,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// runLayout returns the layout of the run's objects, in the run's bucket,
+// or the server's layout if the run can't be read.
+func (h *Handler) runLayout(ctx context.Context, runID string) storage.Layout {
+	if layout, err := h.ctrl.RunLayout(ctx, runID); err == nil {
+		return layout
+	}
+	return h.ctrl.Layout()
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
