@@ -195,6 +195,13 @@ func run(log *slog.Logger) error {
 	case runAccess != nil:
 		runCtrl.SetRunObjects(runAccess)
 	}
+	runRetention, err := newRunRetention(cfg, serverCreds, runBuckets, runStore, pg.NewLeases(pool), log)
+	if err != nil {
+		return err
+	}
+	if runRetention != nil {
+		log.Info("run retention on: run data is deleted once runs ended longer ago than the retention period", "retention", cfg.RunRetention)
+	}
 
 	// Workspace config is shared between task and run backends.
 	wsCfg := k8sbackend.WorkspaceConfig{
@@ -437,6 +444,16 @@ func run(log *slog.Logger) error {
 		runRec := reconciler.NewRunReconciler(runStore, eventStore, runBackend, recCfg, log)
 		runRec.SetWorkspaceCleaner(runBackend.WorkspaceStrategy())
 		go runRec.Run(appCtx)
+	}
+
+	// Run retention: deletes the data of runs that ended longer ago than
+	// CONQUEST_RUN_RETENTION, after their remaining Jobs and workspaces.
+	if runRetention != nil {
+		if runBackend != nil {
+			runRetention.SetJobs(runBackend)
+			runRetention.SetWorkspace(runBackend.WorkspaceStrategy())
+		}
+		go runRetention.Run(appCtx)
 	}
 
 	// HTTP server with graceful shutdown.

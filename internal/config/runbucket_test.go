@@ -59,7 +59,7 @@ func TestLoad_RunBucketsOBC(t *testing.T) {
 		t.Errorf("RunBuckets = %q, want %q", cfg.RunBuckets, runbucket.ModeOBC)
 	}
 	want := runbucket.OBCConfig{Namespace: "workflows", StorageClassName: "object-bucket", MaxSize: "10Gi",
-		BindTimeout: runbucket.DefaultOBCBindTimeout}
+		BindTimeout: runbucket.DefaultOBCBindTimeout, Instance: "conquest-workflows"}
 	if cfg.RunBucketsOBC != want {
 		t.Errorf("RunBucketsOBC = %+v, want %+v", cfg.RunBucketsOBC, want)
 	}
