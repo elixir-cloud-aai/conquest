@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,6 +27,17 @@ type Handler struct {
 	ctrl *controller.RunController
 	// base holds the GA4GH service-info base fields; zero: none.
 	base ServiceInfoBase
+	// submitTimeout bounds a run submission from the handler's start; zero:
+	// only the request's context.
+	submitTimeout time.Duration
+}
+
+// SetSubmitTimeout bounds each run submission, body included, to d from the
+// handler's start. Keep it below the server's write timeout: a submission
+// that outlasts that stores a run whose ID the client never gets. Run
+// buckets that take time to make (obc) stop waiting in time for the rest.
+func (h *Handler) SetSubmitTimeout(d time.Duration) {
+	h.submitTimeout = d
 }
 
 // SetServiceInfo makes service-info answer with the GA4GH base fields b,
@@ -98,6 +110,12 @@ func (h *Handler) GetServiceInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SubmitRun(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if h.submitTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, h.submitTimeout)
+		defer cancel()
+	}
 	req, err := parseRunRequest(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -116,7 +134,7 @@ func (h *Handler) SubmitRun(w http.ResponseWriter, r *http.Request) {
 		Tags:                     req.Tags,
 	}
 
-	run, err := h.ctrl.SubmitRun(r.Context(), ctrlReq)
+	run, err := h.ctrl.SubmitRun(ctx, ctrlReq)
 	if err != nil {
 		var ve *adapter.ValidationError
 		if errors.As(err, &ve) {

@@ -242,10 +242,40 @@ func TestOBC_EnsureStopsWhenTheClaimFails(t *testing.T) {
 	}
 }
 
+// With a deadline on the request, Ensure stops waiting early enough to
+// leave the rest of the submission its reserve.
+func TestOBC_EnsureLeavesTheRequestItsReserve(t *testing.T) {
+	f := newOBCFixture(t, OBCConfig{BindTimeout: time.Minute, Reserve: 200 * time.Millisecond})
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := f.p.Ensure(ctx, testRunID); err == nil {
+		t.Fatal("Ensure returned without binding or error")
+	}
+	if d := time.Since(start); d > 300*time.Millisecond {
+		t.Fatalf("Ensure waited %v, want it to stop 200ms before the 400ms deadline", d)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("Ensure used up the request's reserve")
+	}
+
+	// less time left than the reserve: no claim at all
+	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	const other = "0193b6a2-7c1e-7f00-8000-0000000000ff"
+	if _, err := f.p.Ensure(ctx, other); err == nil {
+		t.Fatal("Ensure started without time to finish")
+	}
+	if _, err := f.getOBC(OBCNamePrefix + other); !apierrors.IsNotFound(err) {
+		t.Fatalf("claim created without time to finish: %v", err)
+	}
+}
+
 func TestOBC_EnsureFollowsTheContext(t *testing.T) {
 	f := newOBCFixture(t, OBCConfig{BindTimeout: time.Minute})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
 	if _, err := f.p.Ensure(ctx, testRunID); err == nil {
 		t.Fatal("Ensure returned without binding or error")
 	}

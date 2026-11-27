@@ -2,13 +2,53 @@ package main
 
 import (
 	"encoding/base64"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/anuragxxd/conquest/internal/config"
 	"github.com/anuragxxd/conquest/internal/runbucket"
 )
+
+func TestEnforcePodServiceAccount(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenFile, testToken(`{"sub":"system:serviceaccount:conquest:conquest"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tc := range []struct {
+		mode    runbucket.Mode
+		podSA   string
+		wantErr bool
+	}{
+		{runbucket.ModeOBC, "conquest-pods", false},
+		{runbucket.ModeOBC, "conquest", true},
+		{runbucket.ModeShared, "conquest-pods", false},
+		{runbucket.ModeShared, "conquest", false}, // warns only
+	} {
+		cfg := &config.Config{RunBuckets: tc.mode, K8sNamespace: "conquest", ServiceAccount: tc.podSA}
+		if err := enforcePodServiceAccount(cfg, tokenFile, log); (err != nil) != tc.wantErr {
+			t.Errorf("%s with pods as %s: err = %v, wantErr %v", tc.mode, tc.podSA, err, tc.wantErr)
+		}
+	}
+}
+
+// A run submission waits for its claim within the server's answer.
+func TestSubmitTimeoutFitsTheWriteTimeout(t *testing.T) {
+	if submitTimeout >= serverWriteTimeout {
+		t.Fatalf("submitTimeout %s must stay below the server's write timeout %s", submitTimeout, serverWriteTimeout)
+	}
+	if submitTimeout-runbucket.DefaultOBCReserve < 10*time.Second {
+		t.Fatalf("submitTimeout %s leaves an obc claim less than 10s to bind", submitTimeout)
+	}
+	if runbucket.MaxOBCBindTimeout > submitTimeout {
+		t.Fatalf("MaxOBCBindTimeout %s above submitTimeout %s", runbucket.MaxOBCBindTimeout, submitTimeout)
+	}
+}
 
 // testToken returns an unsigned JWT with the claims payload.
 func testToken(payload string) []byte {
@@ -29,6 +69,8 @@ func TestServiceAccountFromToken(t *testing.T) {
 		testToken(`{"sub":"user:alice"}`),
 		testToken(`{"sub":"system:serviceaccount:only-namespace"}`),
 		testToken(`{"sub":"system:serviceaccount::name"}`),
+		testToken(`{"sub":"system:serviceaccount:namespace:"}`),
+		testToken(`{}`),
 	} {
 		if ns, name, err := serviceAccountFromToken(tok); err == nil {
 			t.Errorf("serviceAccountFromToken(%q) = %q, %q; want an error", tok, ns, name)
@@ -47,6 +89,7 @@ func TestCheckPodServiceAccount(t *testing.T) {
 		{"server's account, padded", "conquest", " conquest ", "conquest", "conquest", true},
 		{"namespace default is the server's", "conquest", "", "conquest", "default", true},
 		{"same name elsewhere", "jobs", "conquest", "conquest", "conquest", false},
+		{"default account elsewhere", "jobs", "", "conquest", "default", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := checkPodServiceAccount(tc.podNS, tc.podSA, tc.srvNS, tc.srvSA)

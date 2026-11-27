@@ -201,6 +201,24 @@ func TestChart_PodServiceAccountSettings(t *testing.T) {
 	if env["CONQUEST_SERVICE_ACCOUNT"] != "custom" {
 		t.Errorf("CONQUEST_SERVICE_ACCOUNT = %q, want custom", env["CONQUEST_SERVICE_ACCOUNT"])
 	}
+
+	// an upgrade with the old default kept in the values renders it; the
+	// server then refuses obc and warns with shared (cmd/conquest)
+	objs = mustRender(t, "conquest.env.CONQUEST_SERVICE_ACCOUNT=conquest")
+	if got := serverEnv(t, objs)["CONQUEST_SERVICE_ACCOUNT"]; got != "conquest" {
+		t.Errorf("CONQUEST_SERVICE_ACCOUNT = %q, want conquest", got)
+	}
+
+	// no account created and none named: the namespace's default
+	objs = mustRender(t, "conquest.podServiceAccount.create=false")
+	if got := serverEnv(t, objs)["CONQUEST_SERVICE_ACCOUNT"]; got != "default" {
+		t.Errorf("CONQUEST_SERVICE_ACCOUNT = %q, want default", got)
+	}
+
+	// the pods' account can't be the server's
+	if _, err := render(t, "conquest.podServiceAccount.name=conquest"); err == nil || !strings.Contains(err.Error(), "podServiceAccount") {
+		t.Errorf("pod account named as the server's: render = %v, want an error", err)
+	}
 }
 
 func TestChart_SharedRunBucketsNeedNoExtraRights(t *testing.T) {

@@ -175,11 +175,8 @@ func run(log *slog.Logger) error {
 	}
 	// Runner and task pods must not run as the server's own ServiceAccount.
 	if k8sCfg != nil {
-		if err := podServiceAccountProblem(k8sCfg.BearerTokenFile, cfg.K8sNamespace, cfg.ServiceAccount); err != nil {
-			if podServiceAccountFatal(cfg.RunBuckets) {
-				return fmt.Errorf("%s=%s: %w", runbucket.EnvMode, cfg.RunBuckets, err)
-			}
-			log.Warn("runner and task pods' ServiceAccount", "err", err)
+		if err := enforcePodServiceAccount(cfg, k8sCfg.BearerTokenFile, log); err != nil {
+			return err
 		}
 	}
 	runCtrl.SetRunBuckets(runBuckets)
@@ -363,6 +360,7 @@ func run(log *slog.Logger) error {
 
 	// HTTP handlers.
 	wesHandler := wes.NewHandler(runCtrl)
+	wesHandler.SetSubmitTimeout(submitTimeout)
 	wesHandler.SetServiceInfo(wes.ServiceInfoBase{
 		ID:               cfg.ServiceInfo.ID,
 		Name:             cfg.ServiceInfo.Name,
@@ -446,7 +444,7 @@ func run(log *slog.Logger) error {
 		Addr:         cfg.HTTPAddr,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: serverWriteTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 

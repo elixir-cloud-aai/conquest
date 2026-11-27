@@ -238,7 +238,8 @@ the Conquest ServiceAccount's rights to create and delete Jobs and PVCs.
 the upstream Pod Security Admission checks.
 
 Runner and task pods also run as a ServiceAccount of their own,
-`CONQUEST_SERVICE_ACCOUNT` (default `conquest`). The chart creates one,
+`CONQUEST_SERVICE_ACCOUNT` (default `conquest`, the name the chart gives
+the server's own account: set it outside the chart). The chart creates one,
 `<conquest.appname>-pods` (`conquest.podServiceAccount`), with no Role bound
 and `automountServiceAccountToken: false`, and sets the variable to it, so
 a token injected for the pods' account (e.g. by a mutating webhook keyed on
@@ -361,12 +362,17 @@ The bucket provisioner creates the bucket, an object store user that may
 reach only that bucket, and a Secret (`AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`) and a ConfigMap (`BUCKET_NAME`, …) named after the
 claim. The run submission waits until the claim is `Bound`, at most
-`CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` (default `20s`, at most `25s`: the
-WES request waits for it, and the server answers within 30 s), then takes
-the bucket's name from the ConfigMap and checks that the Secret holds both
-keys. A claim in phase `Failed`, a timeout or an incomplete Secret or
-ConfigMap fails the submission (`500`), and Conquest deletes the claim
-again. The runner pod gets the claim's Secret by `secretKeyRef`; the
+`CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` (default `20s`, at most `25s`),
+then takes the bucket's name from the ConfigMap and checks that the Secret
+holds both keys. The WES request waits for this: every run submission
+(`POST /ga4gh/wes/v1/runs`, body upload included) must end within 25 s,
+so that its answer with the run ID is written within the server's 30 s
+write timeout. The wait for the claim therefore also stops 5 s before
+that, leaving the time to store the run and create its runner Job, and no
+claim is created with less time left; a submission whose time ran out
+stores no run. A claim in phase `Failed`, a timeout or an incomplete
+Secret or ConfigMap fails the submission (`500`), and Conquest deletes the
+claim again. The runner pod gets the claim's Secret by `secretKeyRef`; the
 server reads it for its own reads and writes in the run's bucket.
 
 Conquest adopts an existing claim of the same name only if it carries the
@@ -398,7 +404,8 @@ Operator requirements:
   and `get` on `secrets` and `configmaps` (the chart's Role has them with
   `obc`). RBAC can't limit `get` to a name prefix, so the server may read
   every Secret in the namespace; runner and task pods have no token, so
-  workflow code can't.
+  workflow code can't. Give Conquest a namespace of its own, so that the
+  server's account reaches no Secrets of other applications.
 
 [rook-obc]: https://rook.io/docs/rook/latest/Storage-Configuration/Object-Storage-RGW/ceph-object-bucket-claim/
 [lbp]: https://github.com/kube-object-storage/lib-bucket-provisioner
@@ -947,7 +954,7 @@ No config files.
 | `CONQUEST_RUN_BUCKETS_OBC_MAX_SIZE` | —                    | Size quota of each run bucket, e.g. `10Gi` (`obc`) |
 | `CONQUEST_RUN_BUCKETS_OBC_MAX_OBJECTS` | —                 | Object quota of each run bucket (`obc`) |
 | `CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` | `20s`            | Wait for a run's claim to be Bound, at most `25s` (`obc`) |
-| `CONQUEST_SERVICE_ACCOUNT`          | `conquest`           | ServiceAccount of runner and task pods; never the server's (see Pod Security) |
+| `CONQUEST_SERVICE_ACCOUNT`          | `conquest`           | ServiceAccount of runner and task pods; never the server's, so override the default (the chart does; see Pod Security) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
 | `CONQUEST_CORS_ALLOWED_ORIGINS`     | —                    | Exact origins of browser front ends (see CORS) |
@@ -1073,8 +1080,13 @@ the runs in their own buckets unreadable for the server (it then has only
 its own keys), and their claims and buckets stay until deleted.
 The chart now runs runner and task pods as `<conquest.appname>-pods`
 instead of the server's account (the default values set
-`CONQUEST_SERVICE_ACCOUNT: conquest` before): no step is needed, Jobs
-created before keep their pods' account. If your values set
+`CONQUEST_SERVICE_ACCOUNT: conquest` before); Jobs created before keep
+their pods' account. Grants the cluster ties to a ServiceAccount don't
+move along: if the server's account was granted something for the pods
+(e.g. an OpenShift SecurityContextConstraints with `oc adm policy
+add-scc-to-user <scc> -z <account>`, or a NetworkPolicy or admission
+rule keyed on it), grant the same to `<conquest.appname>-pods` before the
+upgrade, or new runner and task pods may be refused. If your values set
 `conquest.env.CONQUEST_SERVICE_ACCOUNT` to the server's account, remove it:
 `obc` refuses to start with it, `shared` warns.
 

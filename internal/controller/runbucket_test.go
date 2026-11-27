@@ -22,10 +22,15 @@ type runBucketsStub struct {
 	ensureErr error
 	ensured   []string
 	deleted   []string
+	// onEnsure, if set, runs in Ensure (e.g. to use up the request's time).
+	onEnsure func()
 }
 
 func (s *runBucketsStub) Ensure(_ context.Context, runID string) (runbucket.Bucket, error) {
 	s.ensured = append(s.ensured, runID)
+	if s.onEnsure != nil {
+		s.onEnsure()
+	}
 	if s.ensureErr != nil {
 		return runbucket.Bucket{}, s.ensureErr
 	}
@@ -116,6 +121,28 @@ func TestSubmitRun_FailsWithoutCreatingTheRunIfTheBucketFails(t *testing.T) {
 	}
 	if !slices.Equal(buckets.deleted, buckets.ensured) {
 		t.Fatalf("deleted %v, want the half-made bucket %v deleted", buckets.deleted, buckets.ensured)
+	}
+}
+
+// A request whose time ran out while its bucket was made stores no run (its
+// client would never learn the run ID) and deletes the bucket again.
+func TestSubmitRun_StoresNoRunAfterTheRequestEnded(t *testing.T) {
+	runs := &runStoreStub{}
+	runAdapter := &runAdapterStub{prepared: preparedNextflowRun()}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	buckets := &runBucketsStub{onEnsure: cancel}
+
+	_, err := runBucketsController(runs, runAdapter, runBackend, buckets).SubmitRun(ctx, nextflowRequest)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if runs.createRun != nil || runBackend.spec != nil {
+		t.Fatal("run was persisted or submitted after its request ended")
+	}
+	if len(buckets.ensured) != 1 || !slices.Equal(buckets.deleted, buckets.ensured) {
+		t.Fatalf("deleted %v, want the bucket %v deleted", buckets.deleted, buckets.ensured)
 	}
 }
 

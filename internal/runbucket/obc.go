@@ -95,7 +95,15 @@ type OBCConfig struct {
 	BindTimeout time.Duration
 	// PollInterval is how often Ensure checks the claim (default 500ms).
 	PollInterval time.Duration
+	// Reserve is the time Ensure leaves of its context's deadline for the
+	// rest of the submission (storing the run, creating its runner Job):
+	// it stops waiting that long before the deadline, and creates no claim
+	// with less time left. Default DefaultOBCReserve.
+	Reserve time.Duration
 }
+
+// DefaultOBCReserve is the default of OBCConfig.Reserve.
+const DefaultOBCReserve = 5 * time.Second
 
 // ParseOBCConfig reads the obc provisioner's settings (all but Namespace)
 // with getenv.
@@ -166,6 +174,9 @@ func NewOBC(dyn dynamic.Interface, kube kubernetes.Interface, cfg OBCConfig) (*O
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 500 * time.Millisecond
 	}
+	if cfg.Reserve <= 0 {
+		cfg.Reserve = DefaultOBCReserve
+	}
 	return &OBC{dyn: dyn, kube: kube, cfg: cfg}, nil
 }
 
@@ -183,11 +194,20 @@ func (p *OBC) claims() dynamic.ResourceInterface {
 }
 
 // Ensure creates the run's claim, or adopts it if it exists and carries the
-// run's ID, waits until it is Bound, and returns its bucket and Secret.
+// run's ID, waits until it is Bound, and returns its bucket and Secret. It
+// waits at most the bind timeout, and stops Reserve before ctx's deadline.
 func (p *OBC) Ensure(ctx context.Context, runID string) (Bucket, error) {
 	name, err := claimName(runID)
 	if err != nil {
 		return Bucket{}, err
+	}
+	bindTimeout := p.cfg.BindTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		left := time.Until(deadline) - p.cfg.Reserve
+		if left <= 0 {
+			return Bucket{}, fmt.Errorf("obc run buckets: too little time left in the request for claim %s", name)
+		}
+		bindTimeout = min(bindTimeout, left)
 	}
 	if _, err := p.claims().Create(ctx, p.newClaim(name, runID), metav1.CreateOptions{}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -202,7 +222,7 @@ func (p *OBC) Ensure(ctx context.Context, runID string) (Bucket, error) {
 			return Bucket{}, err
 		}
 	}
-	if err := p.waitBound(ctx, name, runID); err != nil {
+	if err := p.waitBound(ctx, name, runID, bindTimeout); err != nil {
 		return Bucket{}, err
 	}
 
@@ -254,8 +274,8 @@ func (p *OBC) newClaim(name, runID string) *unstructured.Unstructured {
 // ownClaim refuses a claim that doesn't carry the run's ID or is being
 // deleted.
 func ownClaim(obj *unstructured.Unstructured, runID string) error {
-	if obj.GetLabels()[RunIDLabel] != runID {
-		return fmt.Errorf("obc run buckets: claim %s exists but is not labelled %s=%s", obj.GetName(), RunIDLabel, runID)
+	if err := labelledFor(obj, runID); err != nil {
+		return err
 	}
 	if obj.GetDeletionTimestamp() != nil {
 		return fmt.Errorf("obc run buckets: claim %s is being deleted", obj.GetName())
@@ -263,10 +283,19 @@ func ownClaim(obj *unstructured.Unstructured, runID string) error {
 	return nil
 }
 
-// waitBound waits until the claim is Bound, for at most the bind timeout.
-func (p *OBC) waitBound(ctx context.Context, name, runID string) error {
+// labelledFor refuses a claim that doesn't carry the run's ID: Conquest
+// adopts and deletes only its own runs' claims.
+func labelledFor(obj *unstructured.Unstructured, runID string) error {
+	if obj.GetLabels()[RunIDLabel] != runID {
+		return fmt.Errorf("obc run buckets: claim %s is not labelled %s=%s", obj.GetName(), RunIDLabel, runID)
+	}
+	return nil
+}
+
+// waitBound waits until the claim is Bound, for at most timeout.
+func (p *OBC) waitBound(ctx context.Context, name, runID string, timeout time.Duration) error {
 	phase := ""
-	err := wait.PollUntilContextTimeout(ctx, p.cfg.PollInterval, p.cfg.BindTimeout, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, p.cfg.PollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		obj, err := p.claims().Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return false, fmt.Errorf("obc run buckets: get claim %s: %w", name, err)
@@ -287,7 +316,7 @@ func (p *OBC) waitBound(ctx context.Context, name, runID string) error {
 		if phase == "" {
 			phase = "no phase"
 		}
-		return fmt.Errorf("obc run buckets: claim %s not Bound within %s (%s): %w", name, p.cfg.BindTimeout, phase, err)
+		return fmt.Errorf("obc run buckets: claim %s not Bound within %s (%s): %w", name, timeout, phase, err)
 	}
 	return err
 }
@@ -331,8 +360,9 @@ func (p *OBC) Delete(ctx context.Context, runID string) error {
 	if err != nil {
 		return fmt.Errorf("obc run buckets: get claim %s: %w", name, err)
 	}
-	if obj.GetLabels()[RunIDLabel] != runID {
-		return fmt.Errorf("obc run buckets: claim %s is not labelled %s=%s; not deleting it", name, RunIDLabel, runID)
+	// a claim already being deleted is deleted again (no-op)
+	if err := labelledFor(obj, runID); err != nil {
+		return err
 	}
 	uid := obj.GetUID()
 	propagation := metav1.DeletePropagationBackground

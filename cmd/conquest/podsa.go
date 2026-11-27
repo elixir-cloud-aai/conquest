@@ -6,11 +6,39 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/anuragxxd/conquest/internal/config"
 	"github.com/anuragxxd/conquest/internal/runbucket"
 )
+
+// serverWriteTimeout bounds how long the server takes to answer a request,
+// counted from its headers.
+const serverWriteTimeout = 30 * time.Second
+
+// submitTimeout bounds a WES run submission, body upload included, so that
+// its answer (the run ID) is written before serverWriteTimeout. An obc run
+// bucket stops waiting for its claim runbucket.DefaultOBCReserve before
+// it, leaving that to store the run and create its runner Job.
+const submitTimeout = serverWriteTimeout - 5*time.Second
+
+// enforcePodServiceAccount checks the pods' ServiceAccount against the
+// server's (named by its token in tokenFile): a problem stops the server
+// with per-run buckets and is only logged otherwise.
+func enforcePodServiceAccount(cfg *config.Config, tokenFile string, log *slog.Logger) error {
+	err := podServiceAccountProblem(tokenFile, cfg.K8sNamespace, cfg.ServiceAccount)
+	if err == nil {
+		return nil
+	}
+	if podServiceAccountFatal(cfg.RunBuckets) {
+		return fmt.Errorf("%s=%s: %w", runbucket.EnvMode, cfg.RunBuckets, err)
+	}
+	log.Warn("runner and task pods' ServiceAccount", "err", err)
+	return nil
+}
 
 // serviceAccountFromToken returns the namespace and name of the
 // ServiceAccount a Kubernetes token was issued to (its "sub" claim,

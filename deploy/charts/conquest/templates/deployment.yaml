@@ -130,6 +130,9 @@ spec:
               value: {{ .Release.Namespace | quote }}
             {{- end }}
             {{- if not .Values.conquest.env.CONQUEST_SERVICE_ACCOUNT }}
+            {{- if eq (include "conquest.podServiceAccountName" .) (include "conquest.serviceAccountName" .) }}
+            {{- fail "conquest.podServiceAccount: runner and task pods need a ServiceAccount other than the server's (conquest.serviceAccount)" }}
+            {{- end }}
             # Runner and task pods run as their own ServiceAccount, never the
             # server's.
             - name: CONQUEST_SERVICE_ACCOUNT

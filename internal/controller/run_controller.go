@@ -247,6 +247,11 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	run.RunRootURI = layout.RunRootURI(run.RunID)
 	run.ResolvedWorkflowRef = prepared.ResolvedWorkflowRef
 
+	// Making the bucket may take seconds (obc): if the request ended
+	// meanwhile, its client never learns the run ID, so store no run.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("submit run: %w", err)
+	}
 	keepBucket = true
 	if err := c.runs.Create(ctx, run); err != nil {
 		if layout.Bucket != c.layout.Bucket {
