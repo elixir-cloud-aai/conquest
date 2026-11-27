@@ -115,6 +115,9 @@ func TestDataDeleter_DeletesEachRunWhereItsDataIs(t *testing.T) {
 		// a bucket of its own: the provisioner's
 		{RunID: "run-own", LayoutVersion: "v1", RunRootURI: "s3://conquest-run-abc/v1/workflow-runs/run-own/"},
 	} {
+		if err := d.CheckRunData(run); err != nil {
+			t.Fatalf("CheckRunData(%s): %v", run.RunID, err)
+		}
 		if err := d.DeleteRunData(ctx, run); err != nil {
 			t.Fatalf("DeleteRunData(%s): %v", run.RunID, err)
 		}
@@ -162,6 +165,9 @@ func TestDataDeleter_RefusesWhatItCantPlace(t *testing.T) {
 		// provisioner holds it, so deleting one would delete nothing
 		"bucket the provisioner didn't make": {withPerRun, &domain.Run{RunID: "r", RunRootURI: "s3://conquest-old/v1/workflow-runs/r/"}},
 	} {
+		if err := tc.d.CheckRunData(tc.run); err == nil {
+			t.Errorf("%s: CheckRunData succeeded", name)
+		}
 		if err := tc.d.DeleteRunData(ctx, tc.run); err == nil {
 			t.Errorf("%s: DeleteRunData succeeded", name)
 		}

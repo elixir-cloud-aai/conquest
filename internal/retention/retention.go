@@ -45,7 +45,10 @@ const (
 )
 
 // RunData deletes a run's data; runbucket.DataDeleter satisfies it.
+// CheckRunData tells, without I/O, whether DeleteRunData can place the
+// run's data at all.
 type RunData interface {
+	CheckRunData(run *domain.Run) error
 	DeleteRunData(ctx context.Context, run *domain.Run) error
 }
 
@@ -237,6 +240,11 @@ func (s *Sweeper) sweepRuns(ctx context.Context, res *Result) {
 // and records that the data is gone. Every step is idempotent, so a failed
 // run is simply tried again.
 func (s *Sweeper) deleteRun(ctx context.Context, run *domain.Run) error {
+	// A run whose data can't be placed fails before any Kubernetes call:
+	// such runs stay the oldest, so every sweep meets them first.
+	if err := s.data.CheckRunData(run); err != nil {
+		return fmt.Errorf("delete data: %w", err)
+	}
 	// Jobs first: their pods hold the workspace PVC
 	if s.jobs != nil {
 		if err := s.jobs.DeleteRunJobs(ctx, run.RunID); err != nil {

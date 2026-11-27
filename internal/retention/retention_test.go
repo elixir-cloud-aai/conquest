@@ -125,9 +125,19 @@ func (l *leases) Claim(_ context.Context, name, holder string, ttl time.Duration
 
 // data records the runs whose data was deleted.
 type data struct {
-	mu      sync.Mutex
-	deleted []string
-	fail    map[string]error
+	mu       sync.Mutex
+	deleted  []string
+	fail     map[string]error
+	unplaced map[string]bool // runs whose data CheckRunData can't place
+}
+
+func (d *data) CheckRunData(run *domain.Run) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.unplaced[run.RunID] {
+		return errors.New("can't place the run's data")
+	}
+	return nil
 }
 
 func (d *data) DeleteRunData(_ context.Context, run *domain.Run) error {
@@ -229,6 +239,28 @@ func TestSweep_DeletesTheDataOfRunsTerminalForLongerThanTheRetention(t *testing.
 	got = s.SweepOnce(context.Background())
 	if got.Deleted != 1 || d.deleted[len(d.deleted)-1] != "recent" {
 		t.Fatalf("second sweep = %+v, deleted %v; want the recent run deleted", got, d.deleted)
+	}
+}
+
+func TestSweep_ARunWhoseDataCantBePlacedCostsNoClusterCalls(t *testing.T) {
+	c := &clock{now: start}
+	stuck := finished("stuck", domain.StateComplete, start.Add(-900*time.Hour))
+	stuck.Workspace = &domain.WorkspaceBinding{Kind: domain.WorkspaceKindPVC, ClaimName: "ws-stuck"}
+	st := newStore(stuck)
+	d := &data{unplaced: map[string]bool{"stuck": true}}
+	s := newSweeper(t, st, newLeases(c), d, c, "a")
+	k8s := &cluster{}
+	s.SetJobs(k8s)
+	s.SetWorkspace(k8s)
+
+	if got := s.SweepOnce(context.Background()); got.Failed != 1 || got.Deleted != 0 {
+		t.Fatalf("SweepOnce = %+v, want 1 failed", got)
+	}
+	if len(k8s.jobsDeleted) != 0 || len(k8s.cleaned) != 0 || len(d.deleted) != 0 {
+		t.Fatalf("jobs %v, workspaces %v, data %v: want no calls", k8s.jobsDeleted, k8s.cleaned, d.deleted)
+	}
+	if st.runs["stuck"].DataDeletedAt != nil {
+		t.Fatal("run whose data can't be placed is recorded as deleted")
 	}
 }
 

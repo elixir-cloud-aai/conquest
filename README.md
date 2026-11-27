@@ -492,10 +492,16 @@ A step that fails leaves the run as it is, and the next sweep tries again
 (every step can be repeated). A run whose bucket is neither
 `CONQUEST_S3_BUCKET` nor one that `obc` makes (for example after
 `CONQUEST_S3_BUCKET` was renamed) is never recorded as deleted: each
-sweep logs that it can't place the run's data. The sweep deletes the
-current versions of objects only, so `CONQUEST_S3_BUCKET` must not have
-versioning turned on, or older versions of run data stay. The run itself stays: it lists as before,
-`GET /runs/{run_id}` answers `200` with its state, times and request but
+sweep logs that it can't place the run's data, before it touches the
+cluster. A run in a `conquest-run-*` bucket counts as done once its claim
+is gone from Conquest's namespace: so don't give `CONQUEST_S3_BUCKET` a
+name starting with `conquest-run-`, and keep Conquest in its namespace
+while runs there have their own buckets (claims left in an old namespace
+are neither found nor deleted). The sweep deletes the current versions
+of objects only, so `CONQUEST_S3_BUCKET` must not have versioning turned
+on, or older versions of run data stay.
+
+The run itself stays: it lists as before, `GET /runs/{run_id}` answers `200` with its state, times and request but
 without `outputs` and `run_log.stdout`, and the run's and its tasks' logs
 (`GET /runs/{run_id}/tasks`, `/tasks/{task_id}`) carry no log URI but a
 `system_logs` entry saying that the run's data was deleted, and when.

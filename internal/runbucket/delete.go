@@ -28,19 +28,40 @@ func NewDataDeleter(shared *Shared, perRun Provisioner) (*DataDeleter, error) {
 	return &DataDeleter{shared: shared, perRun: perRun}, nil
 }
 
+// CheckRunData reports whether DeleteRunData can place the run's data. It
+// deletes nothing and calls no object store, so callers can skip runs whose
+// data no one may delete before doing other work for them.
+func (d *DataDeleter) CheckRunData(run *domain.Run) error {
+	_, _, err := d.place(run)
+	return err
+}
+
 // DeleteRunData deletes the run's data. A run in the configured bucket
 // (the host of its stored run root; runs without one, such as the stub runs
 // of standalone TES tasks, are there too) loses the objects below its run
 // root, which must be where the layout puts it; a run in a bucket of its
-// own loses that bucket (perRun's Delete). It succeeds if the data is gone
-// already.
+// own loses that bucket (perRun's Delete), if perRun may have made it. It
+// succeeds if the data is gone already.
 func (d *DataDeleter) DeleteRunData(ctx context.Context, run *domain.Run) error {
+	owner, version, err := d.place(run)
+	if err != nil {
+		return err
+	}
+	if owner != nil {
+		return owner.Delete(ctx, run.RunID)
+	}
+	return d.shared.deleteRoot(ctx, version, run.RunID)
+}
+
+// place finds the run's data: the provisioner that owns its bucket, or
+// (owner nil) the layout version of its run root in the configured bucket.
+func (d *DataDeleter) place(run *domain.Run) (BucketOwner, string, error) {
 	configured := d.shared.bucket.Name
 	bucket := configured
 	if run.RunRootURI != "" {
 		var err error
 		if bucket, err = BucketOf(run.RunRootURI); err != nil {
-			return fmt.Errorf("run data of %s: %w", run.RunID, err)
+			return nil, "", fmt.Errorf("run data of %s: %w", run.RunID, err)
 		}
 	}
 	if bucket != configured {
@@ -49,9 +70,9 @@ func (d *DataDeleter) DeleteRunData(ctx context.Context, run *domain.Run) error 
 		// record the data as deleted while it stays.
 		owner, ok := d.perRun.(BucketOwner)
 		if !ok || !owner.OwnsBucket(bucket) {
-			return fmt.Errorf("run data of %s: its bucket %q is neither the configured one nor one the run bucket provisioner makes", run.RunID, bucket)
+			return nil, "", fmt.Errorf("run data of %s: its bucket %q is neither the configured one nor one the run bucket provisioner makes", run.RunID, bucket)
 		}
-		return owner.Delete(ctx, run.RunID)
+		return owner, "", nil
 	}
 	version := run.LayoutVersion
 	if version == "" {
@@ -59,13 +80,13 @@ func (d *DataDeleter) DeleteRunData(ctx context.Context, run *domain.Run) error 
 	}
 	root, err := runRoot(version, run.RunID)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	// delete only what the stored run root names
 	if want := "s3://" + configured + "/" + root; run.RunRootURI != "" && run.RunRootURI != want {
-		return fmt.Errorf("run data of %s: run root %q is not %q", run.RunID, run.RunRootURI, want)
+		return nil, "", fmt.Errorf("run data of %s: run root %q is not %q", run.RunID, run.RunRootURI, want)
 	}
-	return d.shared.deleteRoot(ctx, version, run.RunID)
+	return nil, version, nil
 }
 
 // BucketOwner is a Provisioner that tells which buckets it may have made;
