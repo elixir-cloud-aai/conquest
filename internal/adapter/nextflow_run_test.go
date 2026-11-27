@@ -12,7 +12,6 @@ func TestNextflowRunAdapter_PrepareRun_DefaultVersionAndImage(t *testing.T) {
 		DefaultRunnerImage: "example.com/conquest-nf-24.10.4-runner:latest",
 		InternalBaseURL:    "http://conquest.services.svc.cluster.local",
 		S3Endpoint:         "http://minio.platform.svc.cluster.local:9000",
-		S3Bucket:           "conquest",
 		S3Region:           "us-east-1",
 	})
 
@@ -83,7 +82,6 @@ func TestNextflowRunAdapter_PrepareRun_UsesVersionSpecificImage(t *testing.T) {
 		},
 		InternalBaseURL: "http://conquest.services.svc.cluster.local",
 		S3Endpoint:      "http://minio.platform.svc.cluster.local:9000",
-		S3Bucket:        "conquest",
 		S3Region:        "us-east-1",
 	})
 
@@ -107,7 +105,6 @@ func TestNextflowRunAdapter_PrepareRun_RejectsMissingConfiguredImage(t *testing.
 		DefaultRunnerImage: "example.com/conquest-nf-24.10.4-runner:latest",
 		InternalBaseURL:    "http://conquest.services.svc.cluster.local",
 		S3Endpoint:         "http://minio.platform.svc.cluster.local:9000",
-		S3Bucket:           "conquest",
 		S3Region:           "us-east-1",
 	})
 
@@ -135,7 +132,6 @@ func TestNextflowRunAdapter_PrepareRun_RejectsInvalidWorkflowParams(t *testing.T
 		DefaultRunnerImage: "example.com/conquest-nf-24.10.4-runner:latest",
 		InternalBaseURL:    "http://conquest.services.svc.cluster.local",
 		S3Endpoint:         "http://minio.platform.svc.cluster.local:9000",
-		S3Bucket:           "conquest",
 		S3Region:           "us-east-1",
 	})
 

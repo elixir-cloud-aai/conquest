@@ -250,6 +250,8 @@ spec:
             - name: CONQUEST_STORAGE_ISOLATION
               value: "true"
             {{- end }}
+            - name: CONQUEST_RUN_BUCKETS
+              value: {{ .Values.storageIsolation.runBuckets | default "shared" | quote }}
             - name: CONQUEST_RUNNER_SECRET
               valueFrom:
                 secretKeyRef:

@@ -15,7 +15,6 @@ func TestSnakemakeRunAdapter_PrepareRun_DefaultVersionAndImages(t *testing.T) {
 		DefaultDiskMB:      8192,
 		InternalBaseURL:    "http://conquest.services.svc.cluster.local",
 		S3Endpoint:         "http://minio.platform.svc.cluster.local:9000",
-		S3Bucket:           "conquest",
 		S3Region:           "us-east-1",
 	})
 
@@ -117,7 +116,6 @@ func TestSnakemakeRunAdapter_PrepareRun_UsesVersionSpecificImage(t *testing.T) {
 		DefaultDiskMB:   8192,
 		InternalBaseURL: "http://conquest.svc",
 		S3Endpoint:      "http://minio:9000",
-		S3Bucket:        "conquest",
 		S3Region:        "us-east-1",
 	})
 
@@ -185,7 +183,6 @@ func TestSnakemakeRunAdapter_PrepareRun_TaskImageFallsBackToRunner(t *testing.T)
 		DefaultDiskMB:   8192,
 		InternalBaseURL: "http://conquest.svc",
 		S3Endpoint:      "http://minio:9000",
-		S3Bucket:        "conquest",
 		S3Region:        "us-east-1",
 	})
 

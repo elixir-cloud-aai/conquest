@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anuragxxd/conquest/internal/cors"
+	"github.com/anuragxxd/conquest/internal/runbucket"
 	"github.com/anuragxxd/conquest/internal/runnerauth"
 	"github.com/anuragxxd/conquest/internal/storage"
 )
@@ -117,6 +118,10 @@ type Config struct {
 	// to its run's root (see internal/isolation). Needs
 	// StorageGatewaySecret.
 	StorageIsolation bool
+	// RunBuckets selects where each run's objects live and which S3
+	// credentials its runner gets (see internal/runbucket). Default
+	// "shared": every run in S3Bucket, runners with StorageSecretName.
+	RunBuckets runbucket.Mode
 
 	// RunnerSecret derives each run's runner token (see
 	// internal/runnerauth; at least 32 bytes). Set: the runner callback API
@@ -309,6 +314,10 @@ func Load() (*Config, error) {
 		if c.S3Endpoint == "" {
 			return nil, fmt.Errorf("CONQUEST_STORAGE_ISOLATION needs CONQUEST_S3_ENDPOINT")
 		}
+	}
+
+	if c.RunBuckets, err = runbucket.ParseMode(os.Getenv(runbucket.EnvMode)); err != nil {
+		return nil, err
 	}
 
 	if c.RunnerSecret != "" && len(c.RunnerSecret) < runnerauth.MinSecretBytes {

@@ -133,7 +133,6 @@ func run(log *slog.Logger) error {
 			RunnerImagesByVersion: cfg.NextflowRunnerImages,
 			InternalBaseURL:       cfg.InternalBaseURL,
 			S3Endpoint:            cfg.S3Endpoint,
-			S3Bucket:              cfg.S3Bucket,
 			S3Region:              cfg.S3Region,
 		}),
 	}
@@ -143,7 +142,6 @@ func run(log *slog.Logger) error {
 			RunnerImagesByVersion: cfg.WDLRunnerImages,
 			InternalBaseURL:       cfg.InternalBaseURL,
 			S3Endpoint:            cfg.S3Endpoint,
-			S3Bucket:              cfg.S3Bucket,
 			S3Region:              cfg.S3Region,
 			WorkspaceMode:         cfg.WorkspaceMode,
 			AllowExternalImports:  cfg.WDLAllowExternalImports,
@@ -159,7 +157,6 @@ func run(log *slog.Logger) error {
 			DefaultDiskMB:         cfg.SnakemakeDefaultDiskMB,
 			InternalBaseURL:       cfg.InternalBaseURL,
 			S3Endpoint:            cfg.S3Endpoint,
-			S3Bucket:              cfg.S3Bucket,
 			S3Region:              cfg.S3Region,
 		}))
 	}
@@ -167,6 +164,12 @@ func run(log *slog.Logger) error {
 
 	// Controller.
 	runCtrl := controller.NewRunController(runStore, taskStore, eventStore, layout, adapterRegistry, log)
+	runBuckets, err := newRunBuckets(cfg)
+	if err != nil {
+		return err
+	}
+	runCtrl.SetRunBuckets(runBuckets)
+	log.Info("run buckets", "mode", cfg.RunBuckets)
 	if artifactStore, err := newServerArtifactStore(cfg); err != nil {
 		log.Warn("workflow outputs artifact loading disabled", "err", err)
 	} else if artifactStore != nil {

@@ -17,7 +17,6 @@ type WDLRunAdapterConfig struct {
 	RunnerImagesByVersion map[string]string
 	InternalBaseURL       string
 	S3Endpoint            string
-	S3Bucket              string
 	S3Region              string
 	WorkspaceMode         string
 	AllowExternalImports  bool
@@ -130,7 +129,7 @@ func (a *WDLRunAdapter) PrepareRun(runID string, req SubmissionRequest, layout s
 		"--engine-metadata-key", layout.EngineMetadata(runID),
 		"--internal-tes-base", strings.TrimRight(a.cfg.InternalBaseURL, "/") + "/internal/runs/" + runID,
 		"--s3-endpoint", a.cfg.S3Endpoint,
-		"--s3-bucket", a.cfg.S3Bucket,
+		"--s3-bucket", layout.Bucket,
 		"--s3-region", a.cfg.S3Region,
 	}
 	if stageThroughS3 {

@@ -12,7 +12,6 @@ func TestWDLRunAdapter_PrepareRun_DefaultVersionAndImage(t *testing.T) {
 		DefaultRunnerImage:   "example.com/conquest-wdl-runner:latest",
 		InternalBaseURL:      "http://conquest.services.svc.cluster.local",
 		S3Endpoint:           "http://minio.platform.svc.cluster.local:9000",
-		S3Bucket:             "conquest",
 		S3Region:             "us-east-1",
 		WorkspaceMode:        "pvc",
 		AllowExternalImports: false,

@@ -50,7 +50,13 @@ func buildRunnerJobSpec(
 	for _, env := range spec.Env {
 		envVars = append(envVars, corev1.EnvVar{Name: env.Name, Value: env.Value})
 	}
-	envVars = append(envVars, awsSecretEnvVars(cfg.StorageSecretName)...)
+	// The runner gets its own run's bucket credentials and no other Secret
+	// (internal/runbucket).
+	storageSecret := spec.StorageSecretName
+	if storageSecret == "" {
+		storageSecret = cfg.StorageSecretName
+	}
+	envVars = append(envVars, awsSecretEnvVars(storageSecret)...)
 	if cfg.RunnerToken != nil {
 		envVars = append(envVars, corev1.EnvVar{Name: runnerauth.EnvToken, Value: cfg.RunnerToken(run.RunID)})
 	}

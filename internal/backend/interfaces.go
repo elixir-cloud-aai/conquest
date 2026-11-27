@@ -22,6 +22,9 @@ type RunnerSpec struct {
 	Command []string
 	Args    []string
 	Env     []EnvVar
+	// StorageSecretName is the Secret with the S3 credentials of the run's
+	// bucket (internal/runbucket). Empty: the backend's configured Secret.
+	StorageSecretName string
 }
 
 type RunSubmission struct {
