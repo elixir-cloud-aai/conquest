@@ -103,7 +103,8 @@ jobs:
           go-version: stable
           cache: true
 
-      # each bucket written to takes 7 volumes; the tests write to three
+      # SeaweedFS allocates several volumes (7) per bucket written to: keep
+      # -volume.max well above that times the buckets the tests write to
       - name: Start S3 server
         run: |
           docker run -d --name s3 -p 127.0.0.1:8333:8333 \

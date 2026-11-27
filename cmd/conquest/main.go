@@ -176,9 +176,11 @@ func run(log *slog.Logger) error {
 	// run's credentials.
 	runAccess, err := newRunAccess(cfg, serverCreds, runStore, runBuckets)
 	switch {
-	case cfg.RunBuckets.PerRun() && (err != nil || runAccess == nil):
-		// without it, runs in their own buckets couldn't be served
-		return fmt.Errorf("%s=%s needs CONQUEST_S3_ENDPOINT and the server's S3 credentials: %v", runbucket.EnvMode, cfg.RunBuckets, err)
+	// without access, runs in their own buckets couldn't be served
+	case cfg.RunBuckets.PerRun() && err != nil:
+		return fmt.Errorf("%s=%s: %w", runbucket.EnvMode, cfg.RunBuckets, err)
+	case cfg.RunBuckets.PerRun() && runAccess == nil:
+		return fmt.Errorf("%s=%s needs CONQUEST_S3_ENDPOINT", runbucket.EnvMode, cfg.RunBuckets)
 	case err != nil:
 		log.Warn("workflow outputs artifact loading disabled", "err", err)
 	case runAccess != nil:
@@ -479,13 +481,17 @@ type gatewayStorage struct {
 	// with run buckets: each task's run's bucket and credentials
 	tasks storagegw.TaskLookup
 	runs  storagegw.RunStorage
+	// with storage isolation: the gateway's bound, also for listings
+	bound storagegw.Bound
 }
 
 func (g gatewayStorage) ListPrefix(ctx context.Context, bucket, prefix string) ([]string, error) {
 	return g.lister.ListPrefix(ctx, bucket, prefix)
 }
 
-// ListTaskPrefix lists in the bucket of the task's run, with its credentials.
+// ListTaskPrefix lists in the bucket of the task's run, with its credentials,
+// and, with storage isolation, only below the task's bound, as the gateway
+// does.
 func (g gatewayStorage) ListTaskPrefix(ctx context.Context, taskID, bucket, prefix string) ([]string, error) {
 	if g.runs == nil {
 		return g.ListPrefix(ctx, bucket, prefix)
@@ -493,6 +499,15 @@ func (g gatewayStorage) ListTaskPrefix(ctx context.Context, taskID, bucket, pref
 	task, err := g.tasks.Get(ctx, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("task %s: %w", taskID, err)
+	}
+	if g.bound != nil {
+		b, err := g.bound(ctx, task)
+		if err != nil {
+			return nil, err
+		}
+		if b == "" || !strings.HasPrefix(bucket+"/"+prefix, b) {
+			return nil, fmt.Errorf("%s/%s is outside the bound of task %s", bucket, prefix, taskID)
+		}
 	}
 	runBucket, store, err := g.runs(ctx, task)
 	if err != nil {
@@ -558,7 +573,8 @@ func newStorageGateway(cfg *config.Config, layout storage.Layout, tasks storageg
 	}
 	if cfg.StorageIsolation {
 		if access != nil {
-			gw.SetBound(isolation.RunBoundIn(layout, access.Bucket))
+			st.bound = isolation.RunBoundIn(layout, access.Bucket)
+			gw.SetBound(st.bound)
 		} else {
 			gw.SetBound(isolation.RunBound(layout))
 		}

@@ -337,11 +337,13 @@ in `CONQUEST_S3_BUCKET`, the server's own):
   run root can't be read).
 - Storage gateway: each task gets only its run's bucket, other buckets
   (`CONQUEST_S3_BUCKET` included) get `403`; URLs are presigned, and
-  directory inputs listed, with the run's credentials. If the run's bucket
-  can't be found, the gateway answers `502`.
+  directory inputs listed, with the run's credentials; with storage
+  isolation, the directory inputs of tasks sent to remote endpoints are
+  listed only below the run's root. If the run's bucket can't be found, the
+  gateway answers `502`.
 - Task routing: a task may go to a remote endpoint only with `s3://` inputs
   and outputs in its run's bucket (otherwise its route record says "not the
-  run's bucket").
+  run's bucket"); tasks of a run whose run root names no bucket stay local.
 
 Task pods reach a run's own bucket only through the storage gateway, the
 objectfs workspace mounts `CONQUEST_S3_BUCKET`, and remote endpoints with

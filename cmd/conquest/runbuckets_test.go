@@ -222,4 +222,14 @@ func TestStorageGateway_ListsOnlyTheRunsBucket(t *testing.T) {
 	if _, err := tl.ListTaskPrefix(context.Background(), "missing", "run-a", "v1/"); err == nil {
 		t.Fatal("listing for an unknown task: want an error")
 	}
+	// with storage isolation, listings stay below the task's run root: a
+	// standalone task can't list the configured bucket or other runs' roots
+	for _, prefix := range []string{"", "v1/", "v1/workflow-runs/a/"} {
+		if _, err := tl.ListTaskPrefix(context.Background(), "t2", "conquest", prefix); err == nil || !strings.Contains(err.Error(), "outside the bound") {
+			t.Errorf("standalone task listing conquest/%s: %v, want outside the bound", prefix, err)
+		}
+	}
+	if _, err := tl.ListTaskPrefix(context.Background(), "t1", "run-a", "v1/"); err == nil || !strings.Contains(err.Error(), "outside the bound") {
+		t.Errorf("listing above the run root: %v, want outside the bound", err)
+	}
 }

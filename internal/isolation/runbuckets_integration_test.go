@@ -125,24 +125,27 @@ func TestRunBuckets(t *testing.T) {
 	}
 
 	// the server's access to the runs' buckets
-	endpoint := os.Getenv("CONQUEST_TEST_S3_ENDPOINT")
-	prov := &identityBuckets{}
-	access, err := runbucket.NewAccess(runbucket.AccessConfig{
-		Bucket:      layout.Bucket,
-		Credentials: runbucket.Credentials{AccessKeyID: os.Getenv("CONQUEST_TEST_S3_ACCESS_KEY"), SecretAccessKey: os.Getenv("CONQUEST_TEST_S3_SECRET_KEY")},
-		Endpoint:    endpoint,
-	}, runRoots{
-		"a": "s3://isolation-run-a/" + rootA,
-		"b": "s3://isolation-run-b/" + rootB,
-	}, prov, func(ep string, c runbucket.Credentials) (runbucket.Client, error) {
-		return objstore.NewS3Client(objstore.S3Config{
-			Endpoint: strings.TrimPrefix(strings.TrimPrefix(ep, "https://"), "http://"), AccessKey: c.AccessKeyID, SecretKey: c.SecretAccessKey,
-			Region: "us-east-1", UseSSL: strings.HasPrefix(ep, "https://"),
+	newAccess := func(prov runbucket.Provisioner) *runbucket.Access {
+		t.Helper()
+		access, err := runbucket.NewAccess(runbucket.AccessConfig{
+			Bucket:      layout.Bucket,
+			Credentials: runbucket.Credentials{AccessKeyID: os.Getenv("CONQUEST_TEST_S3_ACCESS_KEY"), SecretAccessKey: os.Getenv("CONQUEST_TEST_S3_SECRET_KEY")},
+			Endpoint:    os.Getenv("CONQUEST_TEST_S3_ENDPOINT"),
+		}, runRoots{
+			"a": "s3://isolation-run-a/" + rootA,
+			"b": "s3://isolation-run-b/" + rootB,
+		}, prov, func(ep string, c runbucket.Credentials) (runbucket.Client, error) {
+			return objstore.NewS3Client(objstore.S3Config{
+				Endpoint: strings.TrimPrefix(strings.TrimPrefix(ep, "https://"), "http://"), AccessKey: c.AccessKeyID, SecretKey: c.SecretAccessKey,
+				Region: "us-east-1", UseSSL: strings.HasPrefix(ep, "https://"),
+			})
 		})
-	})
-	if err != nil {
-		t.Fatal(err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return access
 	}
+	access := newAccess(&identityBuckets{})
 
 	// outputs reads: each run's client reads its own bucket, not the other
 	for id, key := range map[string]string{"a": rootA + "in.txt", "b": rootB + "secret.txt"} {
@@ -188,12 +191,13 @@ func TestRunBuckets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw.SetBound(isolation.RunBoundIn(layout, access.Bucket))
+	// a fresh Access, so the provisioner is asked for every key the gateway uses
+	gwProv := &identityBuckets{}
+	gwAccess := newAccess(gwProv)
+	gw.SetBound(isolation.RunBoundIn(layout, gwAccess.Bucket))
 	gw.SetLister(refusingLister{}) // enables listings; the run's store must list
-	var presignedWith []string
 	gw.SetRunStorage(func(ctx context.Context, task *domain.Task) (string, storagegw.RunStore, error) {
-		bucket, client, err := access.PresignClient(ctx, task.RunID)
-		presignedWith = append(presignedWith, task.RunID)
+		bucket, client, err := gwAccess.PresignClient(ctx, task.RunID)
 		return bucket, client, err
 	})
 	router := chi.NewRouter()
@@ -265,13 +269,14 @@ func TestRunBuckets(t *testing.T) {
 		t.Error("object planted in another run's bucket")
 	}
 
-	for _, id := range presignedWith {
-		if id != "a" {
-			t.Fatalf("run storage of run %s used for run a's task (%v)", id, presignedWith)
-		}
+	// the gateway asked for run a's keys, and only those
+	if len(gwProv.asked) == 0 {
+		t.Fatal("the gateway never asked for the run's keys")
 	}
-	if len(presignedWith) == 0 {
-		t.Fatal("the gateway never used the run's storage")
+	for _, id := range gwProv.asked {
+		if id != "a" {
+			t.Fatalf("keys of run %s used for run a's task (asked %v)", id, gwProv.asked)
+		}
 	}
 }
 

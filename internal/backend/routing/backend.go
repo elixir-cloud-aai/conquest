@@ -160,9 +160,15 @@ func (b *Backend) runInfo(ctx context.Context, runID string) runInfo {
 		return info
 	}
 	info.Engine = run.WorkflowEngine
-	// a run root that names no bucket leaves Conquest's: the storage
-	// gateway still serves each task only its run's bucket
-	info.Bucket, _ = runbucket.BucketOf(run.RunRootURI)
+	// as runbucket.Access: runs without a run root (stub runs of standalone
+	// TES tasks) are in Conquest's bucket; an unreadable one keeps tasks
+	// local, where the gateway would refuse them anyway
+	if run.RunRootURI != "" {
+		var err error
+		if info.Bucket, err = runbucket.BucketOf(run.RunRootURI); err != nil {
+			info.BadRoot = true
+		}
+	}
 	var req struct {
 		Tags map[string]string `json:"tags"`
 	}

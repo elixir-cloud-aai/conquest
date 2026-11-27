@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/anuragxxd/conquest/internal/backend"
@@ -69,11 +70,31 @@ func TestRunInfoTakesTheBucketFromTheRunRoot(t *testing.T) {
 	b.runs = fakeRuns{
 		"own":    {RunID: "own", RunRootURI: "s3://run-own/v1/workflow-runs/own/"},
 		"broken": {RunID: "broken", RunRootURI: "v1/workflow-runs/broken/"},
+		"stub":   {RunID: "stub"},
 	}
-	for runID, want := range map[string]string{"own": "run-own", "broken": "", "missing": ""} {
-		if got := b.runInfo(context.Background(), runID).Bucket; got != want {
-			t.Errorf("runInfo(%s).Bucket = %q, want %q", runID, got, want)
+	for runID, want := range map[string]runInfo{
+		"own":     {Bucket: "run-own"},
+		"broken":  {BadRoot: true},
+		"stub":    {},
+		"missing": {},
+	} {
+		got := b.runInfo(context.Background(), runID)
+		if got.Bucket != want.Bucket || got.BadRoot != want.BadRoot {
+			t.Errorf("runInfo(%s) = %+v, want bucket %q, bad root %v", runID, got, want.Bucket, want.BadRoot)
 		}
+	}
+}
+
+// Tasks of a run whose run root names no bucket stay local.
+func TestBadRunRootStaysLocal(t *testing.T) {
+	b, local, _, _ := setup(t, map[string]string{DataClassTag: "public"})
+	b.runs = fakeRuns{"r1": {RunID: "r1", WorkflowEngine: "nextflow", RunRootURI: "v1/workflow-runs/r1/"}}
+	task := taskWith(nfTask)
+	if err := b.Submit(context.Background(), task); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if rec := record(t, task); len(local.submitted) != 1 || !strings.Contains(rec.LocalOnly, "run root") {
+		t.Fatalf("record = %+v, local submissions %d", rec, len(local.submitted))
 	}
 }
 
