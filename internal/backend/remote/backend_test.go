@@ -460,6 +460,52 @@ func TestGatewayStyle(t *testing.T) {
 	}
 }
 
+// taskListerStorage lists only per task (with the task's run's credentials).
+type taskListerStorage struct {
+	fakeStorage
+	listed []string
+}
+
+func (f *taskListerStorage) ListPrefix(context.Context, string, string) ([]string, error) {
+	return nil, errors.New("listing without the task")
+}
+
+func (f *taskListerStorage) ListTaskPrefix(_ context.Context, taskID, bucket, prefix string) ([]string, error) {
+	f.listed = append(f.listed, taskID+":"+bucket+"/"+prefix)
+	return f.objects[bucket+"/"+prefix], nil
+}
+
+// A Storage that lists per task expands directory inputs with the task.
+func TestGatewayStyleListsWithTheTask(t *testing.T) {
+	fake := &fakeTES{}
+	st := &taskListerStorage{fakeStorage: fakeStorage{objects: map[string][]string{
+		"run-a/run/bundle/": {"run/bundle/Snakefile"},
+	}}}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	cfg := EndpointConfig{Name: "gw", URL: srv.URL + "/ga4gh/tes/v1", S3URLStyle: S3StyleGateway}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	b := New(cfg, "c", st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := newTask()
+	task.TaskRequestPayload = json.RawMessage(`{
+		"executors": [{"image": "busybox", "command": ["true"]}],
+		"inputs": [{"url": "s3://run-a/run/bundle", "path": "/work/workflow", "type": "DIRECTORY"}]
+	}`)
+
+	if err := b.Submit(context.Background(), task); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if len(st.listed) != 1 || st.listed[0] != "t1:run-a/run/bundle/" {
+		t.Fatalf("listed %v", st.listed)
+	}
+	inputs := fake.created[0]["inputs"].([]any)
+	if len(inputs) != 1 || inputs[0].(map[string]any)["path"] != "/work/workflow/Snakefile" {
+		t.Fatalf("inputs = %v", inputs)
+	}
+}
+
 func TestGatewayStyleWithoutGatewayIsRefused(t *testing.T) {
 	b, _ := newTestBackend(t, &fakeTES{}, func(c *EndpointConfig) { c.S3URLStyle = S3StyleGateway })
 

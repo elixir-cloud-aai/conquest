@@ -52,3 +52,20 @@ func RunBound(layout storage.Layout) storagegw.Bound {
 		return layout.Bucket + "/" + layout.RunRoot(task.RunID), nil
 	}
 }
+
+// RunBoundIn confines tasks to their run's root in the run's own bucket, as
+// bucketOf returns it (runbucket.Access.Bucket), instead of the layout's;
+// the server uses it whenever it has S3 access. A task without a run, or
+// whose run's bucket is unknown, may reach nothing.
+func RunBoundIn(layout storage.Layout, bucketOf func(ctx context.Context, runID string) (string, error)) storagegw.Bound {
+	return func(ctx context.Context, task *domain.Task) (string, error) {
+		if task == nil || task.RunID == "" {
+			return "", nil
+		}
+		bucket, err := bucketOf(ctx, task.RunID)
+		if err != nil || bucket == "" {
+			return "", err
+		}
+		return bucket + "/" + layout.RunRoot(task.RunID), nil
+	}
+}

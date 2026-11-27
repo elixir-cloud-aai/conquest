@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/anuragxxd/conquest/internal/backend"
@@ -61,6 +62,53 @@ func setup(t *testing.T, runTags map[string]string) (*Backend, *fakeBackend, *fa
 	b := newBackend(cfg, local, map[string]backend.TaskBackend{"funnel-a": funnel, "tesk-b": tesk}, runs, "conquest",
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return b, local, funnel, tesk
+}
+
+// The run's bucket comes from its stored run root.
+func TestRunInfoTakesTheBucketFromTheRunRoot(t *testing.T) {
+	b, _, _, _ := setup(t, nil)
+	b.runs = fakeRuns{
+		"own":    {RunID: "own", RunRootURI: "s3://run-own/v1/workflow-runs/own/"},
+		"broken": {RunID: "broken", RunRootURI: "v1/workflow-runs/broken/"},
+		"stub":   {RunID: "stub"},
+	}
+	for runID, want := range map[string]runInfo{
+		"own":     {Bucket: "run-own"},
+		"broken":  {NoBucket: "run root names no bucket"},
+		"stub":    {},
+		"missing": {NoBucket: "run's bucket unknown: run lookup failed"},
+	} {
+		got := b.runInfo(context.Background(), runID)
+		if got.Bucket != want.Bucket || got.NoBucket != want.NoBucket {
+			t.Errorf("runInfo(%s) = %+v, want bucket %q, no bucket %q", runID, got, want.Bucket, want.NoBucket)
+		}
+	}
+}
+
+// Tasks of a run whose run root names no bucket stay local.
+func TestBadRunRootStaysLocal(t *testing.T) {
+	b, local, _, _ := setup(t, map[string]string{DataClassTag: "public"})
+	b.runs = fakeRuns{"r1": {RunID: "r1", WorkflowEngine: "nextflow", RunRootURI: "v1/workflow-runs/r1/"}}
+	task := taskWith(nfTask)
+	if err := b.Submit(context.Background(), task); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if rec := record(t, task); len(local.submitted) != 1 || !strings.Contains(rec.LocalOnly, "run root") {
+		t.Fatalf("record = %+v, local submissions %d", rec, len(local.submitted))
+	}
+}
+
+// Tasks of a run that can't be read stay local.
+func TestUnreadableRunStaysLocal(t *testing.T) {
+	b, local, _, _ := setup(t, map[string]string{DataClassTag: "public"})
+	task := taskWith(nfTask)
+	task.RunID = "missing"
+	if err := b.Submit(context.Background(), task); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if rec := record(t, task); len(local.submitted) != 1 || !strings.Contains(rec.LocalOnly, "lookup failed") {
+		t.Fatalf("record = %+v, local submissions %d", rec, len(local.submitted))
+	}
 }
 
 func record(t *testing.T, task *domain.Task) Record {

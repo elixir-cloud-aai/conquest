@@ -23,6 +23,13 @@ type Storage interface {
 	ListPrefix(ctx context.Context, bucket, prefix string) ([]string, error)
 }
 
+// TaskLister is a Storage that lists with the credentials of the task's run
+// (internal/runbucket); directory inputs are expanded with it if Storage
+// provides it.
+type TaskLister interface {
+	ListTaskPrefix(ctx context.Context, taskID, bucket, prefix string) ([]string, error)
+}
+
 // translate turns a stored Conquest task request into the body sent to an
 // endpoint. Fields Conquest doesn't model are kept as they are.
 //
@@ -64,7 +71,7 @@ func translate(ctx context.Context, payload json.RawMessage, cfg *EndpointConfig
 		if st == nil {
 			return nil, fmt.Errorf("s3_url_style %q needs the storage gateway", S3StyleGateway)
 		}
-		if err := expandDirectoryInputs(ctx, task, st); err != nil {
+		if err := expandDirectoryInputs(ctx, task, taskID, st); err != nil {
 			return nil, err
 		}
 	}
@@ -96,9 +103,17 @@ func translate(ctx context.Context, payload json.RawMessage, cfg *EndpointConfig
 	return json.Marshal(task)
 }
 
+// listPrefix lists with the task's run's credentials where st can.
+func listPrefix(ctx context.Context, st Storage, taskID, bucket, prefix string) ([]string, error) {
+	if tl, ok := st.(TaskLister); ok {
+		return tl.ListTaskPrefix(ctx, taskID, bucket, prefix)
+	}
+	return st.ListPrefix(ctx, bucket, prefix)
+}
+
 // expandDirectoryInputs replaces each s3:// DIRECTORY input by FILE inputs
 // for the objects below its URL, at the same relative paths.
-func expandDirectoryInputs(ctx context.Context, task map[string]any, st Storage) error {
+func expandDirectoryInputs(ctx context.Context, task map[string]any, taskID string, st Storage) error {
 	items, _ := task["inputs"].([]any)
 	var out []any
 	for _, item := range items {
@@ -116,7 +131,7 @@ func expandDirectoryInputs(ctx context.Context, task map[string]any, st Storage)
 		if prefix != "" && !strings.HasSuffix(prefix, "/") {
 			prefix += "/"
 		}
-		keys, err := st.ListPrefix(ctx, u.Host, prefix)
+		keys, err := listPrefix(ctx, st, taskID, u.Host, prefix)
 		if err != nil {
 			return fmt.Errorf("list directory input %q: %w", raw, err)
 		}

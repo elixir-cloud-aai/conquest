@@ -4,6 +4,16 @@
       "name": "conquest-test",
       "credentials": [{"accessKey": "conquest-test", "secretKey": "conquest-test-secret"}],
       "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    },
+    {
+      "name": "run-a",
+      "credentials": [{"accessKey": "run-a-key", "secretKey": "run-a-secret"}],
+      "actions": ["Read:isolation-run-a", "List:isolation-run-a", "Write:isolation-run-a"]
+    },
+    {
+      "name": "run-b",
+      "credentials": [{"accessKey": "run-b-key", "secretKey": "run-b-secret"}],
+      "actions": ["Read:isolation-run-b", "List:isolation-run-b", "Write:isolation-run-b"]
     }
   ]
 }

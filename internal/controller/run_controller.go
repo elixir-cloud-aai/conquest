@@ -71,7 +71,14 @@ type RunController struct {
 	taskBackend backend.TaskBackend // nil if no task backend configured
 	artifacts   objstore.Client
 	runBuckets  runbucket.Provisioner // nil: every run uses layout.Bucket
+	runObjects  RunObjects            // nil: artifacts, in the run's bucket
 	log         *slog.Logger
+}
+
+// RunObjects gives the server a run's bucket and a client with the run's
+// credentials for it; runbucket.Access satisfies it.
+type RunObjects interface {
+	Client(ctx context.Context, runID string) (string, runbucket.Client, error)
 }
 
 // NewRunController creates a RunController.
@@ -104,7 +111,8 @@ func (c *RunController) SetTaskBackend(be backend.TaskBackend) {
 }
 
 // SetArtifactStore configures the optional artifact store used to read
-// persisted run-level artifacts such as workflow outputs.
+// persisted run-level artifacts such as workflow outputs. SetRunObjects, which
+// the server uses, takes precedence.
 func (c *RunController) SetArtifactStore(store objstore.Client) {
 	c.artifacts = store
 }
@@ -116,9 +124,43 @@ func (c *RunController) SetRunBuckets(p runbucket.Provisioner) {
 	c.runBuckets = p
 }
 
+// SetRunObjects makes the controller read a run's objects, such as its
+// workflow outputs, with the run's credentials (internal/runbucket), instead
+// of the artifact store's.
+func (c *RunController) SetRunObjects(o RunObjects) {
+	c.runObjects = o
+}
+
 // Layout returns the storage layout used by this controller.
 func (c *RunController) Layout() storage.Layout {
 	return c.layout
+}
+
+// LayoutOf returns the layout of a run's objects: the controller's, in the
+// bucket of the run's stored run root and with the run's stored layout
+// version. Runs without a readable run root get the controller's bucket,
+// runs without a stored version the controller's version.
+func (c *RunController) LayoutOf(run *domain.Run) storage.Layout {
+	layout := c.layout
+	if run == nil {
+		return layout
+	}
+	if bucket, err := runbucket.BucketOf(run.RunRootURI); err == nil {
+		layout.Bucket = bucket
+	}
+	if run.LayoutVersion != "" {
+		layout.Version = run.LayoutVersion
+	}
+	return layout
+}
+
+// RunLayout returns the layout of the run's objects (LayoutOf).
+func (c *RunController) RunLayout(ctx context.Context, runID string) (storage.Layout, error) {
+	run, err := c.runs.Get(ctx, runID)
+	if err != nil {
+		return storage.Layout{}, err
+	}
+	return c.LayoutOf(run), nil
 }
 
 func (c *RunController) SupportedEngines() []string {
@@ -315,8 +357,8 @@ func (c *RunController) GetRun(ctx context.Context, runID string) (*RunLog, erro
 	}
 
 	var outputs json.RawMessage
-	if c.artifacts != nil && run.WorkflowEngine == "wdl" {
-		outputs, err = c.loadWorkflowOutputs(ctx, run.RunID)
+	if (c.artifacts != nil || c.runObjects != nil) && run.WorkflowEngine == "wdl" {
+		outputs, err = c.loadWorkflowOutputs(ctx, run)
 		if err != nil {
 			c.log.Warn("failed to load workflow outputs artifact", "run_id", run.RunID, "err", err)
 		}
@@ -457,8 +499,17 @@ func (c *RunController) persistSubmittedRun(ctx context.Context, run *domain.Run
 	return nil
 }
 
-func (c *RunController) loadWorkflowOutputs(ctx context.Context, runID string) (json.RawMessage, error) {
-	reader, err := c.artifacts.Get(ctx, c.layout.Bucket, c.layout.WorkflowOutputs(runID))
+func (c *RunController) loadWorkflowOutputs(ctx context.Context, run *domain.Run) (json.RawMessage, error) {
+	layout := c.LayoutOf(run)
+	var store objstore.Client = c.artifacts
+	if c.runObjects != nil {
+		bucket, client, err := c.runObjects.Client(ctx, run.RunID)
+		if err != nil {
+			return nil, err
+		}
+		layout.Bucket, store = bucket, client
+	}
+	reader, err := store.Get(ctx, layout.Bucket, layout.WorkflowOutputs(run.RunID))
 	if err != nil {
 		return nil, err
 	}

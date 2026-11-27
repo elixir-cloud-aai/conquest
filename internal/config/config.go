@@ -319,6 +319,9 @@ func Load() (*Config, error) {
 	if c.RunBuckets, err = runbucket.ParseMode(os.Getenv(runbucket.EnvMode)); err != nil {
 		return nil, err
 	}
+	if err := runbucket.CheckDeployment(c.RunBuckets, c.StorageIsolation, c.WorkspaceMode); err != nil {
+		return nil, err
+	}
 
 	if c.RunnerSecret != "" && len(c.RunnerSecret) < runnerauth.MinSecretBytes {
 		return nil, fmt.Errorf("CONQUEST_RUNNER_SECRET must be at least %d bytes", runnerauth.MinSecretBytes)

@@ -261,8 +261,9 @@ the task itself may. The filer reads `<that URL>/<bucket>/<key>` and follows the
 presigned for that object and method; a `GET` of a prefix URL (ending in `/`)
 below a `DIRECTORY` input lists the keys there. What a task may reach is
 decided from its stored TES request as for remote endpoints, and is bounded to
-its run's root, `s3://<bucket>/<layout version>/workflow-runs/<run ID>/`: a
-request that names another run's objects gets `403`. The bound applies to the
+its run's root, `s3://<run's bucket>/<layout version>/workflow-runs/<run ID>/`
+(see [Run buckets](#run-buckets)): a request that names another run's
+objects gets `403`. The bound applies to the
 tasks of remote endpoints with `s3_url_style: gateway` as well (endpoints with
 their own access to the bucket are not bounded). URLs stop working shortly
 after the task ends.
@@ -321,10 +322,37 @@ start.
 
 With `shared`, workflow code in a runner can read and write every run's
 objects in the bucket, as before. Per-run buckets, with credentials that
-reach only the run's own bucket, are planned as further values. So far
-only the runner and the run's root follow the run's bucket; the server's
-own reads and writes (outputs, logs, the storage gateway) and task pods
-still use `CONQUEST_S3_BUCKET`, which is the same bucket with `shared`.
+reach only the run's own bucket, are planned as further values.
+
+The server follows each run's bucket too. A run's bucket is the host of
+its stored run root (`run_root_uri`), so a run keeps its bucket when the
+setting changes, and runs from before the switch stay where they are. Runs
+without a run root, such as the stub runs of standalone TES tasks, are in
+`CONQUEST_S3_BUCKET`. The server reaches a run's objects with the run's
+credentials (the provisioner's, kept in memory and never logged; for runs
+in `CONQUEST_S3_BUCKET`, the server's own):
+
+- WES: the outputs of WDL runs are read from the run's bucket, and the log
+  URIs (`run_log.stdout`, task logs) name it (`CONQUEST_S3_BUCKET` if the
+  run root can't be read).
+- Storage gateway: each task gets only its run's bucket, other buckets
+  (`CONQUEST_S3_BUCKET` included) get `403`; URLs are presigned, and
+  directory inputs listed, with the run's credentials; with storage
+  isolation, the directory inputs of tasks sent to remote endpoints are
+  listed only below the run's root. If the run's bucket can't be found, the
+  gateway answers `502`.
+- Task routing: a task may go to a remote endpoint only with `s3://` inputs
+  and outputs in its run's bucket (otherwise its route record says "not the
+  run's bucket"); tasks of a run that can't be read, or whose run root names no
+  bucket, stay local.
+
+Task pods reach a run's own bucket only through the storage gateway, the
+objectfs workspace mounts `CONQUEST_S3_BUCKET`, and remote endpoints with
+`s3_url_style` `bucket` or `endpoint` use their own access to that bucket.
+So the values that give runs their own buckets (none yet) will refuse to
+start unless `CONQUEST_STORAGE_ISOLATION=true`, the workspace mode isn't
+`objectfs`, every remote endpoint uses `s3_url_style: gateway`, and the
+server has `CONQUEST_S3_ENDPOINT` and its own S3 credentials.
 
 Whatever the value, runner and task pods get no ServiceAccount token
 (`automountServiceAccountToken: false`, no projected token): only the
@@ -641,8 +669,9 @@ the TES FULL view: `logs[0].metadata["conquest.backend"]` and a `route:`
 system log line):
 
 1. **Local only**: tasks of shared-workspace runs (`pvc`, `objectfs`) and
-   tasks with inputs or outputs outside Conquest's bucket. WDL runs in
-   `emptydir` mode stage through S3 (see Workspace Modes) and can go remote.
+   tasks with inputs or outputs outside their run's bucket (see Run
+   buckets). WDL runs in `emptydir` mode stage through S3 (see Workspace
+   Modes) and can go remote.
 2. **Rule**: the first matching rule gives the ordered backends.
 3. **Hint**: tag `conquest.tes_backend` (`"funnel-a,local"`) on the task or
    the WES run narrows and reorders the rule's backends, or, without a rule,
@@ -689,7 +718,8 @@ can use the gateway too (see [Storage Isolation](#storage-isolation)).
 **Requirements on remote sites** (none of these can be expressed in TES):
 
 - Access to Conquest's objects: through the storage gateway, or else read and
-  write access to Conquest's bucket configured on the remote side.
+  write access to Conquest's bucket configured on the remote side (not with
+  per-run buckets, see Run buckets).
 - Executor images pullable from there (Conquest's Snakemake task image too).
 - Files staged so the executor's image user can write next to them:
   Conquest's Snakemake task image runs as UID 1000.
@@ -797,7 +827,9 @@ go test -tags integration ./internal/repository/pg/
 The storage isolation tests (`internal/isolation`, same build tag) need an S3
 server that checks signatures and skip without `CONQUEST_TEST_S3_ENDPOINT`;
 CI runs them against SeaweedFS in the `Storage integration test` job (see the
-comment at the top of `internal/isolation/s3_integration_test.go`).
+comment at the top of `internal/isolation/s3_integration_test.go`). Its
+configuration (`internal/isolation/testdata/s3.json`) has two more
+identities, each allowed only its own bucket, for the run bucket test.
 
 ## Configuration
 
@@ -925,7 +957,9 @@ rolling update, old pods keep serving without authentication (or without
 the new create rule) until they are replaced.
 `storageIsolation.runBuckets` (`CONQUEST_RUN_BUCKETS`) defaults to
 `shared`, which keeps every run in `CONQUEST_S3_BUCKET` as before: the
-upgrade to a chart with this setting needs no step.
+upgrade to a chart with this setting needs no step. The same holds for the
+server following each run's bucket (outputs, log URIs, storage gateway):
+with `shared`, that is `CONQUEST_S3_BUCKET` for every run.
 
 CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository
