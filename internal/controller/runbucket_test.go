@@ -338,3 +338,24 @@ func TestSubmitRun_SharedBucketPreparesTheRunOnce(t *testing.T) {
 		t.Fatalf("runner spec = %+v, want Secret storage-secrets", runBackend.spec)
 	}
 }
+
+// A run in the configured bucket that fails before it is stored has no
+// bucket of its own to delete and wrote no objects yet: the provisioner's
+// Delete (which deletes a run's objects) isn't called.
+func TestSubmitRun_DeletesNothingOfAnUnstoredRunInTheConfiguredBucket(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	buckets := &fixedBucketStub{bucket: runbucket.Bucket{Name: "conquest", SecretName: "storage-secrets"}}
+	runs := &runStoreStub{}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+
+	if _, err := runBucketsController(runs, &runAdapterStub{prepared: preparedNextflowRun()}, runBackend, buckets).SubmitRun(ctx, nextflowRequest); err == nil {
+		t.Fatal("expected an error")
+	}
+	if runs.createRun != nil {
+		t.Fatal("run was stored after its request ended")
+	}
+	if len(buckets.deleted) != 0 {
+		t.Fatalf("deleted %v, want nothing deleted in the configured bucket", buckets.deleted)
+	}
+}

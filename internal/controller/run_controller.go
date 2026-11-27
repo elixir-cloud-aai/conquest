@@ -154,13 +154,9 @@ func (c *RunController) LayoutOf(run *domain.Run) storage.Layout {
 	return layout
 }
 
-// RunLayout returns the layout of the run's objects (LayoutOf).
-func (c *RunController) RunLayout(ctx context.Context, runID string) (storage.Layout, error) {
-	run, err := c.runs.Get(ctx, runID)
-	if err != nil {
-		return storage.Layout{}, err
-	}
-	return c.LayoutOf(run), nil
+// Run returns the stored run, without reading its objects (GetRun does).
+func (c *RunController) Run(ctx context.Context, runID string) (*domain.Run, error) {
+	return c.runs.Get(ctx, runID)
 }
 
 func (c *RunController) SupportedEngines() []string {
@@ -213,7 +209,8 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	// Until the run is stored, a failure (Ensure's included: it may have made
 	// half a bucket) leaves nothing that refers to the run's bucket: delete
 	// it again. A failed Create keeps the bucket: the run may have been
-	// stored before the error.
+	// stored before the error. A run in the configured bucket has no bucket
+	// of its own and no objects yet: nothing to delete.
 	keepBucket := false
 	defer func() {
 		if !keepBucket {
@@ -223,6 +220,9 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	runLayout, storageSecret, err := c.ensureRunBucket(ctx, runID)
 	if err != nil {
 		return nil, err
+	}
+	if runLayout.Bucket == c.layout.Bucket {
+		keepBucket = true
 	}
 	if runLayout != layout {
 		layout = runLayout
@@ -405,7 +405,8 @@ func (c *RunController) GetRun(ctx context.Context, runID string) (*RunLog, erro
 	}
 
 	var outputs json.RawMessage
-	if (c.artifacts != nil || c.runObjects != nil) && run.WorkflowEngine == "wdl" {
+	// a run whose data was deleted has no outputs to read
+	if (c.artifacts != nil || c.runObjects != nil) && run.WorkflowEngine == "wdl" && run.DataDeletedAt == nil {
 		outputs, err = c.loadWorkflowOutputs(ctx, run)
 		if err != nil {
 			c.log.Warn("failed to load workflow outputs artifact", "run_id", run.RunID, "err", err)

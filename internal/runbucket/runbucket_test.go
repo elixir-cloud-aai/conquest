@@ -32,20 +32,6 @@ func TestShared_EnsureRefusesAnEmptyRunID(t *testing.T) {
 	}
 }
 
-func TestShared_DeleteKeepsTheSharedBucket(t *testing.T) {
-	p, err := NewShared("conquest-workflows", "storage-secrets")
-	if err != nil {
-		t.Fatalf("NewShared: %v", err)
-	}
-	if err := p.Delete(context.Background(), "run-a"); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	got, err := p.Ensure(context.Background(), "run-b")
-	if err != nil || got.Name != "conquest-workflows" {
-		t.Fatalf("Ensure after Delete = %+v, %v", got, err)
-	}
-}
-
 func TestNewShared_RequiresBucketAndSecret(t *testing.T) {
 	if _, err := NewShared("", "storage-secrets"); err == nil {
 		t.Fatal("NewShared without a bucket must fail")

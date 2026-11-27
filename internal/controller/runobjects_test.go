@@ -97,6 +97,23 @@ func TestGetRun_NoOutputsWithoutTheRunsClient(t *testing.T) {
 	}
 }
 
+// A run whose data was deleted after the retention period is read without
+// touching its (deleted) bucket.
+func TestGetRun_ReadsNoOutputsOfARunWhoseDataIsGone(t *testing.T) {
+	deleted := time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC)
+	runs := &runStoreStub{getRun: &domain.Run{RunID: "a", WorkflowEngine: "wdl", RunRootURI: "s3://run-a/v1/workflow-runs/a/", DataDeletedAt: &deleted}}
+	objects := &runObjectsStub{buckets: map[string]string{"a": "run-a"}}
+	ctrl := runObjectsController(runs)
+	ctrl.SetRunObjects(objects)
+	result, err := ctrl.GetRun(context.Background(), "a")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if result.Outputs != nil || len(objects.asked) != 0 {
+		t.Fatalf("outputs = %s, clients asked for %v; want neither", result.Outputs, objects.asked)
+	}
+}
+
 // The artifact store alone reads from the run's bucket.
 func TestGetRun_ArtifactStoreReadsTheRunsBucket(t *testing.T) {
 	runs := &runStoreStub{getRun: &domain.Run{RunID: "a", WorkflowEngine: "wdl", RunRootURI: "s3://run-a/v1/workflow-runs/a/"}}
@@ -132,11 +149,16 @@ func TestLayoutOf(t *testing.T) {
 	}
 }
 
-func TestRunLayout(t *testing.T) {
+func TestRun_ReadsTheStoredRun(t *testing.T) {
 	runs := &runStoreStub{getRun: &domain.Run{RunID: "a", RunRootURI: "s3://run-a/v1/workflow-runs/a/"}}
-	got, err := runObjectsController(runs).RunLayout(context.Background(), "a")
-	if err != nil || got.Bucket != "run-a" {
-		t.Fatalf("RunLayout = %+v, %v", got, err)
+	ctrl := runObjectsController(runs)
+	run, err := ctrl.Run(context.Background(), "a")
+	if err != nil || run.RunID != "a" {
+		t.Fatalf("Run = %+v, %v", run, err)
+	}
+	got := ctrl.LayoutOf(run)
+	if got.Bucket != "run-a" {
+		t.Fatalf("LayoutOf = %+v", got)
 	}
 	if got.RunLogURI("a") != "s3://run-a/v1/workflow-runs/a/logs/run.log" {
 		t.Fatalf("RunLogURI = %s", got.RunLogURI("a"))

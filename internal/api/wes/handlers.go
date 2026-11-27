@@ -173,6 +173,10 @@ func (h *Handler) GetRun(w http.ResponseWriter, r *http.Request) {
 			Stdout:    layout.RunLogURI(run.RunID),
 		},
 	}
+	if run.DataDeletedAt != nil {
+		resp.RunLog.Stdout = ""
+		resp.RunLog.SystemLogs = dataDeletedLogs(*run.DataDeletedAt)
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -245,18 +249,10 @@ func (h *Handler) ListRunTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout := h.runLayout(r.Context(), runID)
+	layout, deleted := h.runLogs(r.Context(), runID)
 	logs := make([]TaskLog, 0, len(result.Tasks))
 	for _, t := range result.Tasks {
-		logs = append(logs, TaskLog{
-			ID:        t.TaskID,
-			Name:      t.EngineTaskName,
-			StartTime: controller.TimeStr(t.StartedAt),
-			EndTime:   controller.TimeStr(t.FinishedAt),
-			ExitCode:  t.ExitCode,
-			Stdout:    layout.TaskLogURI(t.RunID, t.TaskID, int(t.Attempt), 0),
-			TesURI:    fmt.Sprintf("/ga4gh/tes/v1/tasks/%s", t.TESTaskID),
-		})
+		logs = append(logs, taskLog(t, layout, deleted))
 	}
 
 	writeJSON(w, http.StatusOK, TaskListResponse{
@@ -275,17 +271,35 @@ func (h *Handler) GetRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout := h.runLayout(r.Context(), runID)
-	resp := TaskLog{
-		ID:        task.TaskID,
-		Name:      task.EngineTaskName,
-		StartTime: controller.TimeStr(task.StartedAt),
-		EndTime:   controller.TimeStr(task.FinishedAt),
-		ExitCode:  task.ExitCode,
-		Stdout:    layout.TaskLogURI(task.RunID, task.TaskID, int(task.Attempt), 0),
-		TesURI:    fmt.Sprintf("/ga4gh/tes/v1/tasks/%s", task.TESTaskID),
+	layout, deleted := h.runLogs(r.Context(), runID)
+	writeJSON(w, http.StatusOK, taskLog(task, layout, deleted))
+}
+
+// taskLog returns the WES log of a task of a run with the given layout,
+// whose data was deleted at deleted (nil: it exists).
+func taskLog(t *domain.Task, layout storage.Layout, deleted *time.Time) TaskLog {
+	l := TaskLog{
+		ID:        t.TaskID,
+		Name:      t.EngineTaskName,
+		StartTime: controller.TimeStr(t.StartedAt),
+		EndTime:   controller.TimeStr(t.FinishedAt),
+		ExitCode:  t.ExitCode,
+		Stdout:    layout.TaskLogURI(t.RunID, t.TaskID, int(t.Attempt), 0),
+		TesURI:    fmt.Sprintf("/ga4gh/tes/v1/tasks/%s", t.TESTaskID),
 	}
-	writeJSON(w, http.StatusOK, resp)
+	if deleted != nil {
+		l.Stdout = ""
+		l.SystemLogs = dataDeletedLogs(*deleted)
+	}
+	return l
+}
+
+// dataDeletedLogs are the system logs of a run, or a task of a run, whose
+// data was deleted at deleted after the retention period: its log URIs
+// would name deleted objects.
+func dataDeletedLogs(deleted time.Time) []string {
+	return []string{fmt.Sprintf("run data deleted at %s: the retention period of finished runs passed; logs and outputs are gone",
+		deleted.UTC().Format(time.RFC3339))}
 }
 
 // ---------------------------------------------------------------------------
@@ -345,13 +359,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// runLayout returns the layout of the run's objects, in the run's bucket,
-// or the server's layout if the run can't be read.
-func (h *Handler) runLayout(ctx context.Context, runID string) storage.Layout {
-	if layout, err := h.ctrl.RunLayout(ctx, runID); err == nil {
-		return layout
+// runLogs returns the layout of the run's objects, in the run's bucket,
+// and when the run's data was deleted (nil: it exists); the server's layout
+// and nil if the run can't be read.
+func (h *Handler) runLogs(ctx context.Context, runID string) (storage.Layout, *time.Time) {
+	run, err := h.ctrl.Run(ctx, runID)
+	if err != nil {
+		return h.ctrl.Layout(), nil
 	}
-	return h.ctrl.Layout()
+	return h.ctrl.LayoutOf(run), run.DataDeletedAt
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
