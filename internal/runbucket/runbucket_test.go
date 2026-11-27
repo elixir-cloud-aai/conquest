@@ -65,7 +65,9 @@ func TestParseMode(t *testing.T) {
 		{"shared", ModeShared, false},
 		{" shared ", ModeShared, false},
 		{"Shared", "", true},
-		{"obc", "", true},
+		{"obc", ModeOBC, false},
+		{" obc ", ModeOBC, false},
+		{"OBC", "", true},
 		{"per-run", "", true},
 	} {
 		got, err := ParseMode(tc.in)

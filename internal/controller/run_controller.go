@@ -247,6 +247,17 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	run.RunRootURI = layout.RunRootURI(run.RunID)
 	run.ResolvedWorkflowRef = prepared.ResolvedWorkflowRef
 
+	// In any mode: if the request ended (client gone, or its time ran out,
+	// e.g. while an obc bucket was made), its client never learns the run
+	// ID, so store no run.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("submit run: %w", err)
+	}
+	// From here on, finish what storing the run starts, even if the request
+	// ends meanwhile: a stored run without its runner Job or error state
+	// would stay QUEUED for good.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runSubmitFinishTimeout)
+	defer cancel()
 	keepBucket = true
 	if err := c.runs.Create(ctx, run); err != nil {
 		if layout.Bucket != c.layout.Bucket {
@@ -265,7 +276,7 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 		submission, err := c.runBackend.SubmitRun(ctx, run, &prepared.RunnerSpec)
 		if err != nil {
 			// Run was persisted but submission failed. Mark as SYSTEM_ERROR.
-			if setErr := c.runs.SetError(ctx, run.RunID, domain.StateSystemError, "runner submission failed: "+err.Error()); setErr != nil {
+			if setErr := c.setSubmitError(run.RunID, domain.StateSystemError, "runner submission failed: "+err.Error()); setErr != nil {
 				c.log.Error("failed to persist run submission error", "run_id", run.RunID, "err", setErr)
 			}
 			run.ErrorSummary = "runner submission failed: " + err.Error()
@@ -274,7 +285,7 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 			return run, nil // return the run even on submission failure
 		}
 		if submission == nil || submission.BackendRef == "" {
-			if setErr := c.runs.SetError(ctx, run.RunID, domain.StateSystemError, "runner submission returned no backend reference"); setErr != nil {
+			if setErr := c.setSubmitError(run.RunID, domain.StateSystemError, "runner submission returned no backend reference"); setErr != nil {
 				c.log.Error("failed to persist missing backend ref error", "run_id", run.RunID, "err", setErr)
 			}
 			run.ErrorSummary = "runner submission returned no backend reference"
@@ -294,7 +305,7 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 			if cancelErr := c.runBackend.CancelRun(context.Background(), &domain.Run{RunID: run.RunID, BackendRef: submission.BackendRef}); cancelErr != nil {
 				c.log.Error("failed to clean up runner after persistence error", "run_id", run.RunID, "backend_ref", submission.BackendRef, "err", cancelErr)
 			}
-			if setErr := c.runs.SetError(ctx, run.RunID, domain.StateSystemError, "failed to persist runner submission: "+err.Error()); setErr != nil {
+			if setErr := c.setSubmitError(run.RunID, domain.StateSystemError, "failed to persist runner submission: "+err.Error()); setErr != nil {
 				c.log.Error("failed to persist runner submission persistence error", "run_id", run.RunID, "err", setErr)
 			}
 			run.BackendRef = submission.BackendRef
@@ -341,10 +352,47 @@ func (c *RunController) deleteRunBucket(runID string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runBucketCleanupTimeout)
 	defer cancel()
-	if err := c.runBuckets.Delete(ctx, runID); err != nil {
-		c.log.Error("failed to delete the bucket of a run that was not created", "run_id", runID, "err", err)
+	for attempt := 1; ; attempt++ {
+		err := c.runBuckets.Delete(ctx, runID)
+		if err == nil {
+			return
+		}
+		if attempt == runBucketCleanupAttempts {
+			c.log.Error("gave up deleting the bucket of a run that was not created", "run_id", runID, "err", err)
+			return
+		}
+		c.log.Warn("failed to delete the bucket of a run that was not created; retrying", "run_id", runID, "attempt", attempt, "err", err)
+		select {
+		case <-ctx.Done():
+			c.log.Error("gave up deleting the bucket of a run that was not created", "run_id", runID, "err", err)
+			return
+		case <-time.After(time.Duration(attempt) * runBucketCleanupBackoff):
+		}
 	}
 }
+
+// runBucketCleanupAttempts and runBucketCleanupBackoff: deleteRunBucket
+// retries, since nothing else finds the bucket of a run that wasn't stored.
+const (
+	runBucketCleanupAttempts = 3
+	runBucketCleanupBackoff  = 500 * time.Millisecond
+)
+
+// setSubmitError stores a submitted run's error state on its own context:
+// the submission's may have run out, and the run would stay QUEUED.
+func (c *RunController) setSubmitError(runID string, state domain.State, summary string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), runErrorTimeout)
+	defer cancel()
+	return c.runs.SetError(ctx, runID, state, summary)
+}
+
+// runErrorTimeout bounds setSubmitError.
+const runErrorTimeout = 10 * time.Second
+
+// runSubmitFinishTimeout bounds what SubmitRun does once it stores the run
+// (store, runner Job, state), independent of the request. A variable for
+// tests.
+var runSubmitFinishTimeout = 30 * time.Second
 
 // runBucketCleanupTimeout bounds deleteRunBucket.
 const runBucketCleanupTimeout = 30 * time.Second

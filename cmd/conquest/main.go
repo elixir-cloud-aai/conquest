@@ -166,9 +166,18 @@ func run(log *slog.Logger) error {
 	// Controller.
 	runCtrl := controller.NewRunController(runStore, taskStore, eventStore, layout, adapterRegistry, log)
 	serverCreds := serverCredentials()
-	runBuckets, err := newRunBuckets(cfg, serverCreds)
+	// The Kubernetes API: runner and task Jobs, and obc run buckets. Only
+	// inside a cluster.
+	k8sCfg, k8sErr := rest.InClusterConfig()
+	runBuckets, err := newRunBuckets(cfg, serverCreds, inClusterClients(k8sCfg, k8sErr))
 	if err != nil {
 		return err
+	}
+	// Runner and task pods must not run as the server's own ServiceAccount.
+	if k8sCfg != nil {
+		if err := enforcePodServiceAccount(cfg, k8sCfg.BearerTokenFile, log); err != nil {
+			return err
+		}
 	}
 	runCtrl.SetRunBuckets(runBuckets)
 	log.Info("run buckets", "mode", cfg.RunBuckets)
@@ -228,9 +237,8 @@ func run(log *slog.Logger) error {
 	// Try to create K8s backend (only works inside a K8s cluster).
 	var taskBackend *k8sbackend.Backend
 	var clientset kubernetes.Interface
-	k8sCfg, err := rest.InClusterConfig()
-	if err != nil {
-		log.Warn("not running in k8s cluster, TES backend disabled", "err", err)
+	if k8sErr != nil {
+		log.Warn("not running in k8s cluster, TES backend disabled", "err", k8sErr)
 	} else {
 		clientset, err = kubernetes.NewForConfig(k8sCfg)
 		if err != nil {
@@ -352,6 +360,7 @@ func run(log *slog.Logger) error {
 
 	// HTTP handlers.
 	wesHandler := wes.NewHandler(runCtrl)
+	wesHandler.SetSubmitTimeout(submitTimeout)
 	wesHandler.SetServiceInfo(wes.ServiceInfoBase{
 		ID:               cfg.ServiceInfo.ID,
 		Name:             cfg.ServiceInfo.Name,
@@ -434,9 +443,9 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Addr:         cfg.HTTPAddr,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  serverReadTimeout,
+		WriteTimeout: serverWriteTimeout,
+		IdleTimeout:  serverIdleTimeout,
 	}
 
 	// Start server in a goroutine.

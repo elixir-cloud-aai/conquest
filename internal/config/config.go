@@ -122,6 +122,10 @@ type Config struct {
 	// credentials its runner gets (see internal/runbucket). Default
 	// "shared": every run in S3Bucket, runners with StorageSecretName.
 	RunBuckets runbucket.Mode
+	// RunBucketsOBC configures RunBuckets "obc" (CONQUEST_RUN_BUCKETS_OBC_*,
+	// see runbucket.ParseOBCConfig); its Namespace is K8sNamespace. Zero
+	// for other modes.
+	RunBucketsOBC runbucket.OBCConfig
 
 	// RunnerSecret derives each run's runner token (see
 	// internal/runnerauth; at least 32 bytes). Set: the runner callback API
@@ -321,6 +325,12 @@ func Load() (*Config, error) {
 	}
 	if err := runbucket.CheckDeployment(c.RunBuckets, c.StorageIsolation, c.WorkspaceMode); err != nil {
 		return nil, err
+	}
+	if c.RunBuckets == runbucket.ModeOBC {
+		if c.RunBucketsOBC, err = runbucket.ParseOBCConfig(os.Getenv); err != nil {
+			return nil, err
+		}
+		c.RunBucketsOBC.Namespace = c.K8sNamespace
 	}
 
 	if c.RunnerSecret != "" && len(c.RunnerSecret) < runnerauth.MinSecretBytes {

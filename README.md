@@ -237,6 +237,18 @@ the Conquest ServiceAccount's rights to create and delete Jobs and PVCs.
 `internal/backend/k8s/podsecurity_test.go` checks every generated pod against
 the upstream Pod Security Admission checks.
 
+Runner and task pods also run as a ServiceAccount of their own,
+`CONQUEST_SERVICE_ACCOUNT` (default `conquest`, which is also the server
+account's name in the chart's default values, so always set it; the chart
+does). The chart creates one,
+`<conquest.appname>-pods` (`conquest.podServiceAccount`), with no Role bound
+and `automountServiceAccountToken: false`, and sets the variable to it, so
+a token injected for the pods' account (e.g. by a mutating webhook keyed on
+it) carries no rights. In the cluster, the server compares the setting with
+its own account (from its token): if the pods would run as the server's
+account, it refuses to start with per-run buckets (see
+[Run buckets](#run-buckets)) and warns otherwise.
+
 [pss]: https://kubernetes.io/docs/concepts/security/pod-security-standards/#restricted
 
 ## Storage Isolation
@@ -316,13 +328,88 @@ again; if storing the run fails, the bucket is kept (the run may have been
 stored anyway), as is the bucket of a stored run whose runner fails to
 start.
 
-| Value              | Bucket of every run  | Runner's credentials                        |
-|--------------------|----------------------|---------------------------------------------|
-| `shared` (default) | `CONQUEST_S3_BUCKET` | `CONQUEST_STORAGE_SECRET_NAME`, bucket-wide |
+| Value              | Bucket of every run                   | Runner's credentials                        |
+|--------------------|---------------------------------------|---------------------------------------------|
+| `shared` (default) | `CONQUEST_S3_BUCKET`                  | `CONQUEST_STORAGE_SECRET_NAME`, bucket-wide |
+| `obc`              | its own, from an ObjectBucketClaim    | the claim's Secret, only the run's bucket   |
 
 With `shared`, workflow code in a runner can read and write every run's
-objects in the bucket, as before. Per-run buckets, with credentials that
-reach only the run's own bucket, are planned as further values.
+objects in the bucket, as before. With `obc`, a runner's credentials reach
+only its own run's bucket, and the object store enforces that.
+
+#### `obc`: one ObjectBucketClaim per run
+
+With `CONQUEST_RUN_BUCKETS=obc`, Conquest creates an ObjectBucketClaim
+(`objectbucket.io/v1alpha1`, served by [Rook/Ceph][rook-obc] and other
+[lib-bucket-provisioner][lbp] drivers) for each run:
+
+```yaml
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: conquest-run-<run ID>
+  labels:
+    conquest.io/run-id: <run ID>
+    app.kubernetes.io/managed-by: conquest
+spec:
+  generateBucketName: conquest-run-
+  storageClassName: <CONQUEST_RUN_BUCKETS_OBC_STORAGE_CLASS>
+  additionalConfig:                # only the quotas that are set
+    maxSize: <CONQUEST_RUN_BUCKETS_OBC_MAX_SIZE>
+    maxObjects: <CONQUEST_RUN_BUCKETS_OBC_MAX_OBJECTS>
+```
+
+The bucket provisioner creates the bucket, an object store user that may
+reach only that bucket, and a Secret (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`) and a ConfigMap (`BUCKET_NAME`, …) named after the
+claim. The run submission waits until the claim is `Bound`, at most
+`CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` (default and at most `20s`),
+then takes the bucket's name from the ConfigMap and checks that the Secret
+holds both keys. The WES request waits for this: every run submission
+(`POST /ga4gh/wes/v1/runs`, body upload included) must end within 25 s,
+so that its answer with the run ID is written within the server's 30 s
+write timeout. The wait for the claim therefore also stops 5 s before
+that, leaving the time to store the run and create its runner Job, and no
+claim is created with less time left; a submission whose time ran out
+stores no run. A claim in phase `Failed`, a timeout or an incomplete
+Secret or ConfigMap fails the submission (`500`), and Conquest deletes the
+claim again. The runner pod gets the claim's Secret by `secretKeyRef`; the
+server reads it for its own reads and writes in the run's bucket.
+
+Conquest adopts an existing claim of the same name only if it carries the
+run's `conquest.io/run-id` label and isn't being deleted, and deletes only
+claims with that label. Deleting a claim deletes its bucket if the
+StorageClass's `reclaimPolicy` is `Delete`; Rook then deletes the bucket
+with all its objects. Conquest deletes claims only of runs that fail
+before they are stored (see above); claims of stored runs stay until an
+operator deletes them (`kubectl delete objectbucketclaims -l
+conquest.io/run-id=<run ID>`).
+
+Operator requirements:
+
+- An ObjectBucketClaim StorageClass whose buckets are in the object store
+  at `CONQUEST_S3_ENDPOINT`: runners and the server reach every run's
+  bucket there (the ConfigMap's `BUCKET_HOST` is not used), and the
+  storage gateway presigns for `CONQUEST_S3_PUBLIC_ENDPOINT` if set. Use
+  `reclaimPolicy: Delete` so that a deleted claim takes its bucket along;
+  with `Retain`, buckets and their data stay behind. Each run adds a
+  bucket and an object store user: check the object store's limits.
+- `CONQUEST_STORAGE_ISOLATION=true`, a workspace mode other than
+  `objectfs`, `s3_url_style: gateway` for every remote endpoint, and
+  `CONQUEST_S3_ENDPOINT` with the server's own S3 credentials (see below).
+- Runner and task pods with a ServiceAccount of their own
+  (`CONQUEST_SERVICE_ACCOUNT`, see [Pod Security](#pod-security)): the
+  server refuses to start if they would run as its own account.
+- RBAC: the server's ServiceAccount needs, in Conquest's namespace,
+  `create`, `get` and `delete` on `objectbucketclaims.objectbucket.io`
+  and `get` on `secrets` and `configmaps` (the chart's Role has them with
+  `obc`). RBAC can't limit `get` to a name prefix, so the server may read
+  every Secret in the namespace; runner and task pods have no token, so
+  workflow code can't. Give Conquest a namespace of its own, so that the
+  server's account reaches no Secrets of other applications.
+
+[rook-obc]: https://rook.io/docs/rook/latest/Storage-Configuration/Object-Storage-RGW/ceph-object-bucket-claim/
+[lbp]: https://github.com/kube-object-storage/lib-bucket-provisioner
 
 The server follows each run's bucket too. A run's bucket is the host of
 its stored run root (`run_root_uri`), so a run keeps its bucket when the
@@ -349,8 +436,8 @@ in `CONQUEST_S3_BUCKET`, the server's own):
 Task pods reach a run's own bucket only through the storage gateway, the
 objectfs workspace mounts `CONQUEST_S3_BUCKET`, and remote endpoints with
 `s3_url_style` `bucket` or `endpoint` use their own access to that bucket.
-So the values that give runs their own buckets (none yet) will refuse to
-start unless `CONQUEST_STORAGE_ISOLATION=true`, the workspace mode isn't
+So the values that give runs their own buckets (`obc`) refuse to start
+unless `CONQUEST_STORAGE_ISOLATION=true`, the workspace mode isn't
 `objectfs`, every remote endpoint uses `s3_url_style: gateway`, and the
 server has `CONQUEST_S3_ENDPOINT` and its own S3 credentials.
 
@@ -831,6 +918,14 @@ comment at the top of `internal/isolation/s3_integration_test.go`). Its
 configuration (`internal/isolation/testdata/s3.json`) has two more
 identities, each allowed only its own bucket, for the run bucket test.
 
+The `obc` provisioner is tested against a fake Kubernetes API with a stub
+bucket provisioner that binds claims and creates their Secret and
+ConfigMap (`internal/runbucket/obc_test.go`); no test runs a real
+ObjectBucketClaim provisioner.
+
+The chart's render tests (`deploy/chart_test.go`) run `helm template`; they
+skip without `helm` on the `PATH`, except in CI (`CI=true`).
+
 ## Configuration
 
 All settings come from environment variables with the `CONQUEST_` prefix.
@@ -856,6 +951,11 @@ No config files.
 | `CONQUEST_TASK_HELPER_RESOURCES`    | —                    | Task init container resources     |
 | `CONQUEST_STORAGE_ISOLATION`        | `false`              | No S3 credentials in task pods (see Storage Isolation) |
 | `CONQUEST_RUN_BUCKETS`              | `shared`             | Each run's bucket and runner credentials (see Run buckets) |
+| `CONQUEST_RUN_BUCKETS_OBC_STORAGE_CLASS` | —               | StorageClass of the run buckets' claims (required with `obc`) |
+| `CONQUEST_RUN_BUCKETS_OBC_MAX_SIZE` | —                    | Size quota of each run bucket, e.g. `10Gi` (`obc`) |
+| `CONQUEST_RUN_BUCKETS_OBC_MAX_OBJECTS` | —                 | Object quota of each run bucket (`obc`) |
+| `CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` | `20s`            | Wait for a run's claim to be Bound, at most `20s` (`obc`) |
+| `CONQUEST_SERVICE_ACCOUNT`          | `conquest`           | ServiceAccount of runner and task pods; never the server's, so override the default (the chart does; see Pod Security) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
 | `CONQUEST_CORS_ALLOWED_ORIGINS`     | —                    | Exact origins of browser front ends (see CORS) |
@@ -920,11 +1020,22 @@ authenticated.
 - **Storage isolation** (see Storage Isolation): `storageIsolation.enabled:
   true` keeps S3 credentials out of task pods.
   Runner pods still get the bucket-wide S3 credentials with
-  `storageIsolation.runBuckets: shared`, the only value so far (see Run
-  buckets): workflow code in a runner can read and write every run's
-  objects in the bucket. Until per-run buckets are available, let only
-  trusted callers create runs (`create.entitlements`), process only data that
-  isn't sensitive, and tell users about this limit.
+  `storageIsolation.runBuckets: shared` (the default, see Run buckets):
+  workflow code in a runner can read and write every run's objects in the
+  bucket. Where the cluster has an ObjectBucketClaim provisioner (e.g.
+  Rook/Ceph), set `storageIsolation.runBuckets: obc` and
+  `storageIsolation.obc.storageClassName` (optional: `maxSize`,
+  `maxObjects`, `bindTimeout`): each run gets its own bucket, and its
+  runner only that bucket's credentials; the chart adds the Role rules
+  (see obc), and rendering fails without storage isolation, without a
+  storage class or with the objectfs workspace. With `shared`, let only
+  trusted callers create runs (`create.entitlements`), process only data
+  that isn't sensitive, and tell users about this limit.
+- **Pods' ServiceAccount** (see Pod Security): the chart creates
+  `<conquest.appname>-pods` (default `conquest-pods`), without Role and
+  token, and runs runner and task pods as it (`conquest.podServiceAccount`;
+  `conquest.env.CONQUEST_SERVICE_ACCOUNT` overrides it). Rendering fails
+  if the pods' account would be the server's.
 - **Browser front ends and registries**: `cors.allowedOrigins` (exact
   origins, see CORS) and `serviceInfo.*` (see Service info) are empty by
   default.
@@ -947,6 +1058,10 @@ auth:
       entitlements: [<exact entitlement>]
 storageIsolation:
   enabled: true
+  runBuckets: obc                   # where the cluster has OBCs, else shared
+  obc:
+    storageClassName: <bucket StorageClass>   # e.g. a Rook object bucket class
+    maxSize: 100Gi                  # optional per-run quota
 ```
 
 Upgrading: drain active runs before switching authentication on (see
@@ -960,6 +1075,27 @@ the new create rule) until they are replaced.
 upgrade to a chart with this setting needs no step. The same holds for the
 server following each run's bucket (outputs, log URIs, storage gateway):
 with `shared`, that is `CONQUEST_S3_BUCKET` for every run.
+Switching to `obc` needs no draining: runs from before the switch keep
+their run root in `CONQUEST_S3_BUCKET` and stay readable with the server's
+keys; only new runs get their own buckets. Switching back to `shared` makes
+the runs in their own buckets unreadable for the server (it then has only
+its own keys), and their claims and buckets stay until deleted.
+The chart now runs runner and task pods as `<conquest.appname>-pods`
+instead of the server's account (the default values set
+`CONQUEST_SERVICE_ACCOUNT: conquest` before); Jobs created before keep
+their pods' account. Grants the cluster ties to a ServiceAccount don't
+move along: if the server's account was granted something for the pods
+(e.g. an OpenShift SecurityContextConstraints with `oc adm policy
+add-scc-to-user <scc> -z <account>`, or a CNI policy (e.g. Calico,
+Cilium) or admission rule keyed on it), grant the same to `<conquest.appname>-pods` before the
+upgrade, or new runner and task pods may be refused. If your values set
+`conquest.env.CONQUEST_SERVICE_ACCOUNT` to the server's account (as the
+old default values did, `conquest`), remove it: the chart refuses to
+render with it. Outside the chart, the server refuses to start with it
+with `obc` and warns with `shared`.
+In every mode, a WES run submission now ends within 25 s of the handler's
+start, and a submission whose client disconnected or whose time ran out
+before the run was stored stores no run (see obc).
 
 CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository

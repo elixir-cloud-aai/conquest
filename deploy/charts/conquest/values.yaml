@@ -130,7 +130,8 @@ conquest:
     CONQUEST_S3_ENDPOINT: "http://minio.platform.svc.cluster.local:9000"
     CONQUEST_S3_REGION: "us-east-1"
     CONQUEST_LAYOUT_VERSION: "v1"
-    CONQUEST_SERVICE_ACCOUNT: "conquest"
+    # CONQUEST_SERVICE_ACCOUNT (ServiceAccount of runner and task pods)
+    # defaults to podServiceAccount below; never set it to the server's own.
     # CONQUEST_K8S_NAMESPACE defaults to the release namespace, where the chart's
     # Role is bound. Set it here only to create Jobs somewhere else.
     # CONQUEST_IMAGE is set automatically from the deployment image in the template.
@@ -142,9 +143,20 @@ conquest:
     # CONQUEST_SNAKEMAKE_RUNNER_IMAGE and CONQUEST_SNAKEMAKE_TASK_IMAGE are set
     # automatically in the template when configured.
 
+  # ServiceAccount of the server, bound to the chart's Role.
   serviceAccount:
     create: true
     name: conquest
+
+  # ServiceAccount of the runner and task pods (CONQUEST_SERVICE_ACCOUNT):
+  # no Role bound and automountServiceAccountToken: false, so workflow code
+  # gets no Kubernetes API access even if a webhook keyed on the account
+  # would inject a token. Default name: <conquest.appname>-pods. With
+  # create: false, name an existing account without rights (empty: the
+  # namespace's default account).
+  podServiceAccount:
+    create: true
+    name: ""
 
   migration:
     image:
@@ -214,17 +226,35 @@ storageGateway:
 # (storageGateway.s3PublicEndpoint if set, else CONQUEST_S3_ENDPOINT).
 # Uses the storage gateway's secret (storageGateway.existingSecret, or one
 # generated); storageGateway.enabled is needed only for remote endpoints.
-# Runner pods still get S3 credentials: those of their run's bucket (runBuckets).
+# Runner pods still get S3 credentials: those of their run's bucket
+# (runBuckets; with "obc", they reach only that run's bucket).
 storageIsolation:
   enabled: false
   # Where each run's objects live and which S3 credentials its runner pod
-  # gets (CONQUEST_RUN_BUCKETS, README: Run buckets). "shared" (the only
-  # value so far): every run in CONQUEST_S3_BUCKET, every runner with the
-  # bucket-wide credentials (CONQUEST_STORAGE_SECRET_NAME). Applies whether
-  # or not storage isolation is enabled; values that give runs their own
-  # buckets will need it, a workspace mode other than objectfs, and remote
-  # endpoints with s3_url_style: gateway.
+  # gets (CONQUEST_RUN_BUCKETS, README: Run buckets).
+  # - "shared": every run in CONQUEST_S3_BUCKET, every runner with the
+  #   bucket-wide credentials (CONQUEST_STORAGE_SECRET_NAME). Applies
+  #   whether or not storage isolation is enabled.
+  # - "obc": each run gets its own bucket through an ObjectBucketClaim
+  #   (objectbucket.io, e.g. Rook/Ceph), and its runner only that bucket's
+  #   credentials. Needs storageIsolation.enabled, a workspace mode other
+  #   than objectfs, remote endpoints with s3_url_style: gateway, and
+  #   obc.storageClassName; adds the Role rules for claims, Secrets and
+  #   ConfigMaps.
   runBuckets: shared
+  # Settings of runBuckets "obc" (CONQUEST_RUN_BUCKETS_OBC_*).
+  obc:
+    # StorageClass of the bucket provisioner (required with obc). Its
+    # buckets must be in the object store at CONQUEST_S3_ENDPOINT. With
+    # reclaimPolicy Delete, deleting a run's claim deletes its bucket.
+    storageClassName: ""
+    # Quotas of each run's bucket (additionalConfig maxSize, maxObjects),
+    # where the provisioner supports them. Empty: none.
+    maxSize: ""        # a quantity, e.g. 10Gi
+    maxObjects: ""     # e.g. 100000
+    # How long a run submission waits for its claim to be Bound, at most
+    # 20s (the WES request waits for it). Empty: 20s.
+    bindTimeout: ""
 
 # Runner callback authentication: each runner pod gets its run's runner
 # token (env CONQUEST_RUNNER_TOKEN, derived from this secret and the run ID),

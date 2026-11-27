@@ -7,6 +7,10 @@ import (
 	"os"
 	"strings"
 
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
 	"github.com/anuragxxd/conquest/internal/backend/remote"
 	"github.com/anuragxxd/conquest/internal/backend/routing"
 	"github.com/anuragxxd/conquest/internal/config"
@@ -25,9 +29,33 @@ func serverCredentials() runbucket.Credentials {
 	}
 }
 
+// kubeClients returns clients of the Kubernetes API, or an error outside a
+// cluster.
+type kubeClients func() (dynamic.Interface, kubernetes.Interface, error)
+
+// inClusterClients returns kubeClients for the in-cluster config restCfg
+// (nil outside a cluster, with inClusterErr saying why).
+func inClusterClients(restCfg *rest.Config, inClusterErr error) kubeClients {
+	return func() (dynamic.Interface, kubernetes.Interface, error) {
+		if restCfg == nil {
+			return nil, nil, fmt.Errorf("not running in a Kubernetes cluster: %w", inClusterErr)
+		}
+		dyn, err := dynamic.NewForConfig(restCfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create dynamic k8s client: %w", err)
+		}
+		kube, err := kubernetes.NewForConfig(restCfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create k8s client: %w", err)
+		}
+		return dyn, kube, nil
+	}
+}
+
 // newRunBuckets returns the run bucket provisioner that cfg.RunBuckets
-// selects; creds are the server's own keys for the configured bucket.
-func newRunBuckets(cfg *config.Config, creds runbucket.Credentials) (runbucket.Provisioner, error) {
+// selects; creds are the server's own keys for the configured bucket, and
+// clients reach the Kubernetes API (obc).
+func newRunBuckets(cfg *config.Config, creds runbucket.Credentials, clients kubeClients) (runbucket.Provisioner, error) {
 	switch cfg.RunBuckets {
 	case runbucket.ModeShared:
 		p, err := runbucket.NewShared(cfg.S3Bucket, cfg.StorageSecretName)
@@ -36,6 +64,15 @@ func newRunBuckets(cfg *config.Config, creds runbucket.Credentials) (runbucket.P
 		}
 		p.SetCredentials(creds)
 		return p, nil
+	case runbucket.ModeOBC:
+		if clients == nil {
+			return nil, fmt.Errorf("%s=%s needs the Kubernetes API", runbucket.EnvMode, cfg.RunBuckets)
+		}
+		dyn, kube, err := clients()
+		if err != nil {
+			return nil, fmt.Errorf("%s=%s: %w", runbucket.EnvMode, cfg.RunBuckets, err)
+		}
+		return runbucket.NewOBC(dyn, kube, cfg.RunBucketsOBC)
 	default:
 		return nil, fmt.Errorf("%s: unknown mode %q", runbucket.EnvMode, cfg.RunBuckets)
 	}
