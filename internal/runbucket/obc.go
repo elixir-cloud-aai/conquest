@@ -111,8 +111,8 @@ type OBCConfig struct {
 	// with less time left. Default DefaultOBCReserve.
 	Reserve time.Duration
 	// Instance names this Conquest in the InstanceLabel of its claims (the
-	// server uses its configured bucket); empty: no label, and
-	// ListRunBuckets fails.
+	// server uses the random ID its database holds, pg.InstanceID); empty:
+	// no label, and ListRunBuckets fails.
 	Instance string
 	// ListPageSize is how many claims ListRunBuckets reads per request
 	// (default 500).
@@ -417,6 +417,12 @@ func (p *OBC) Delete(ctx context.Context, runID string) error {
 }
 
 var _ BucketLister = (*OBC)(nil)
+
+// OwnsBucket reports whether the bucket can be one of this provisioner's:
+// its claims have the provisioner generate names from OBCNamePrefix.
+func (p *OBC) OwnsBucket(bucket string) bool {
+	return strings.HasPrefix(bucket, OBCNamePrefix)
+}
 
 // ListRunBuckets lists this instance's claims (InstanceLabel) that carry a
 // run ID and aren't being deleted, with their run IDs and creation times.

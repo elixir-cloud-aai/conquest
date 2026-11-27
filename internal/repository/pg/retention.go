@@ -84,3 +84,13 @@ func (l *Leases) Claim(ctx context.Context, name, holder string, ttl time.Durati
 	}
 	return tag.RowsAffected() == 1, nil
 }
+
+// InstanceID returns this Conquest's identity: the random ID that migration
+// 000010 stores once per database.
+func InstanceID(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	var id string
+	if err := pool.QueryRow(ctx, `SELECT id FROM instance`).Scan(&id); err != nil {
+		return "", fmt.Errorf("read the instance ID: %w", err)
+	}
+	return id, nil
+}

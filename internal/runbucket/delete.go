@@ -44,10 +44,14 @@ func (d *DataDeleter) DeleteRunData(ctx context.Context, run *domain.Run) error 
 		}
 	}
 	if bucket != configured {
-		if d.perRun == nil {
-			return fmt.Errorf("run data of %s: its bucket %q is not the configured one, and no provisioner gives runs buckets of their own", run.RunID, bucket)
+		// Only a bucket the provisioner may have made: for any other (e.g.
+		// the configured bucket before a rename), deleting a claim would
+		// record the data as deleted while it stays.
+		owner, ok := d.perRun.(BucketOwner)
+		if !ok || !owner.OwnsBucket(bucket) {
+			return fmt.Errorf("run data of %s: its bucket %q is neither the configured one nor one the run bucket provisioner makes", run.RunID, bucket)
 		}
-		return d.perRun.Delete(ctx, run.RunID)
+		return owner.Delete(ctx, run.RunID)
 	}
 	version := run.LayoutVersion
 	if version == "" {
@@ -62,6 +66,13 @@ func (d *DataDeleter) DeleteRunData(ctx context.Context, run *domain.Run) error 
 		return fmt.Errorf("run data of %s: run root %q is not %q", run.RunID, run.RunRootURI, want)
 	}
 	return d.shared.deleteRoot(ctx, version, run.RunID)
+}
+
+// BucketOwner is a Provisioner that tells which buckets it may have made;
+// DataDeleter hands it only those.
+type BucketOwner interface {
+	Provisioner
+	OwnsBucket(bucket string) bool
 }
 
 // OwnedBucket is a bucket that a provisioner made for a run.

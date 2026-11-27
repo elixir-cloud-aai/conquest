@@ -95,6 +95,21 @@ func TestRetentionStore(t *testing.T) {
 	}
 }
 
+func TestInstanceID(t *testing.T) {
+	runs, _ := testStores(t)
+	a, err := InstanceID(context.Background(), runs.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := InstanceID(context.Background(), runs.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a) != 36 || a != b {
+		t.Fatalf("instance IDs %q, %q; want one stable UUID", a, b)
+	}
+}
+
 func TestLeases(t *testing.T) {
 	ctx := context.Background()
 	runs, _ := testStores(t)

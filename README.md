@@ -350,7 +350,7 @@ metadata:
   name: conquest-run-<run ID>
   labels:
     conquest.io/run-id: <run ID>
-    conquest.io/instance: <CONQUEST_S3_BUCKET>   # this Conquest
+    conquest.io/instance: <instance ID>   # this Conquest's, from its database
     app.kubernetes.io/managed-by: conquest
 spec:
   generateBucketName: conquest-run-
@@ -386,8 +386,10 @@ before they are stored (see above) and, with run retention on, the claims
 of runs that ended longer ago than the retention period and the claims
 left without a run (see [Run retention](#run-retention)). Without run
 retention, the claims of stored runs stay. The `conquest.io/instance`
-label (the configured bucket, `CONQUEST_S3_BUCKET`) tells Conquests in one
-namespace apart: each looks for claims without a run only among its own.
+label (a random ID that the database makes once, table `instance`) tells
+Conquests in one namespace apart: each looks for claims without a run
+only among its own. Conquests that share a database share the ID, as
+they share the runs.
 
 Operator requirements:
 
@@ -410,8 +412,9 @@ Operator requirements:
   for claims without a run) and `get` on `secrets` and `configmaps` (the
   chart's Role has them with `obc`). RBAC can't limit `get` to a name
   prefix, so the server may read every Secret in the namespace; runner
-  and task pods have no token, so workflow code can't. Give Conquest a namespace of its own, so that the
-  server's account reaches no Secrets of other applications.
+  and task pods have no token, so workflow code can't. Give Conquest a
+  namespace of its own, so that the server's account reaches no Secrets
+  of other applications.
 
 [rook-obc]: https://rook.io/docs/rook/latest/Storage-Configuration/Object-Storage-RGW/ceph-object-bucket-claim/
 [lbp]: https://github.com/kube-object-storage/lib-bucket-provisioner
@@ -486,7 +489,12 @@ retention period and still has its data, oldest first, the sweep deletes
 3. and records the time in the run's `data_deleted_at`.
 
 A step that fails leaves the run as it is, and the next sweep tries again
-(every step can be repeated). The run itself stays: it lists as before,
+(every step can be repeated). A run whose bucket is neither
+`CONQUEST_S3_BUCKET` nor one that `obc` makes (for example after
+`CONQUEST_S3_BUCKET` was renamed) is never recorded as deleted: each
+sweep logs that it can't place the run's data. The sweep deletes the
+current versions of objects only, so `CONQUEST_S3_BUCKET` must not have
+versioning turned on, or older versions of run data stay. The run itself stays: it lists as before,
 `GET /runs/{run_id}` answers `200` with its state, times and request but
 without `outputs` and `run_log.stdout`, and the run's and its tasks' logs
 (`GET /runs/{run_id}/tasks`, `/tasks/{task_id}`) carry no log URI but a
@@ -1147,7 +1155,8 @@ the runs in their own buckets unreadable for the server (it then has only
 its own keys), and their claims and buckets stay until deleted.
 Run retention (`runRetention`, `CONQUEST_RUN_RETENTION`) is off by default,
 so the upgrade to a chart with it deletes nothing; its database migration
-(`000010`, column `runs.data_deleted_at` and table `leases`) runs with the
+(`000010`, column `runs.data_deleted_at` and tables `leases` and
+`instance`) runs with the
 chart's migration init container as usual. Turning it on deletes, at the
 first sweep (within minutes of the rollout), the data of every run that
 ended longer ago than the retention period, including runs from before the

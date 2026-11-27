@@ -19,4 +19,15 @@ CREATE TABLE IF NOT EXISTS leases (
     expires_at TIMESTAMPTZ NOT NULL
 );
 
+-- The identity of this Conquest: one random ID per database. Conquest
+-- labels the run buckets it makes with it, so that it looks for buckets
+-- without a run only among its own, never among those of another Conquest
+-- (another database) in the same namespace.
+CREATE TABLE IF NOT EXISTS instance (
+    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    id        TEXT NOT NULL
+);
+INSERT INTO instance (id) VALUES (gen_random_uuid()::text)
+    ON CONFLICT (singleton) DO NOTHING;
+
 COMMIT;

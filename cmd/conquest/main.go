@@ -169,6 +169,13 @@ func run(log *slog.Logger) error {
 	// The Kubernetes API: runner and task Jobs, and obc run buckets. Only
 	// inside a cluster.
 	k8sCfg, k8sErr := rest.InClusterConfig()
+	if cfg.RunBuckets == runbucket.ModeOBC {
+		// claims carry this Conquest's identity: the orphan sweep of run
+		// retention lists only its own
+		if cfg.RunBucketsOBC.Instance, err = pg.InstanceID(ctx, pool); err != nil {
+			return err
+		}
+	}
 	runBuckets, err := newRunBuckets(cfg, serverCreds, inClusterClients(k8sCfg, k8sErr))
 	if err != nil {
 		return err

@@ -334,10 +334,8 @@ func Load() (*Config, error) {
 		if c.RunBucketsOBC, err = runbucket.ParseOBCConfig(os.Getenv); err != nil {
 			return nil, err
 		}
+		// The server sets Instance from the database (pg.InstanceID).
 		c.RunBucketsOBC.Namespace = c.K8sNamespace
-		// Each instance labels its claims, so that it lists only its own
-		// when it looks for claims without a run.
-		c.RunBucketsOBC.Instance = c.S3Bucket
 	}
 
 	if v := strings.TrimSpace(os.Getenv("CONQUEST_RUN_RETENTION")); v != "" {

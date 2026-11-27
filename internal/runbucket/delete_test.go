@@ -3,6 +3,7 @@ package runbucket
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,11 @@ type runBuckets struct {
 func (p *runBuckets) Delete(_ context.Context, runID string) error {
 	p.deleted = append(p.deleted, runID)
 	return p.err
+}
+
+// OwnsBucket claims the buckets that obc's would be named like.
+func (p *runBuckets) OwnsBucket(bucket string) bool {
+	return strings.HasPrefix(bucket, OBCNamePrefix)
 }
 
 func newTestShared(t *testing.T) (*Shared, *prefixes) {
@@ -132,7 +138,13 @@ func TestDataDeleter_RefusesWhatItCantPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withPerRun, err := NewDataDeleter(s, &runBuckets{})
+	perRun := &runBuckets{}
+	t.Cleanup(func() {
+		if len(perRun.deleted) != 0 {
+			t.Errorf("provisioner deleted %v", perRun.deleted)
+		}
+	})
+	withPerRun, err := NewDataDeleter(s, perRun)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +158,9 @@ func TestDataDeleter_RefusesWhatItCantPlace(t *testing.T) {
 		"other run's root":    {withPerRun, &domain.Run{RunID: "r", LayoutVersion: "v1", RunRootURI: "s3://conquest-workflows/v1/workflow-runs/s/"}},
 		// shared mode: another bucket is no one's to delete
 		"other bucket, no per-run provisioner": {withoutPerRun, &domain.Run{RunID: "r", RunRootURI: "s3://conquest-run-abc/v1/workflow-runs/r/"}},
+		// e.g. the configured bucket before a rename: no claim of the
+		// provisioner holds it, so deleting one would delete nothing
+		"bucket the provisioner didn't make": {withPerRun, &domain.Run{RunID: "r", RunRootURI: "s3://conquest-old/v1/workflow-runs/r/"}},
 	} {
 		if err := tc.d.DeleteRunData(ctx, tc.run); err == nil {
 			t.Errorf("%s: DeleteRunData succeeded", name)
