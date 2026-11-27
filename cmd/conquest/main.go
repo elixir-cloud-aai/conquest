@@ -166,9 +166,21 @@ func run(log *slog.Logger) error {
 	// Controller.
 	runCtrl := controller.NewRunController(runStore, taskStore, eventStore, layout, adapterRegistry, log)
 	serverCreds := serverCredentials()
-	runBuckets, err := newRunBuckets(cfg, serverCreds)
+	// The Kubernetes API: runner and task Jobs, and obc run buckets. Only
+	// inside a cluster.
+	k8sCfg, k8sErr := rest.InClusterConfig()
+	runBuckets, err := newRunBuckets(cfg, serverCreds, inClusterClients(k8sCfg, k8sErr))
 	if err != nil {
 		return err
+	}
+	// Runner and task pods must not run as the server's own ServiceAccount.
+	if k8sCfg != nil {
+		if err := podServiceAccountProblem(k8sCfg.BearerTokenFile, cfg.K8sNamespace, cfg.ServiceAccount); err != nil {
+			if podServiceAccountFatal(cfg.RunBuckets) {
+				return fmt.Errorf("%s=%s: %w", runbucket.EnvMode, cfg.RunBuckets, err)
+			}
+			log.Warn("runner and task pods' ServiceAccount", "err", err)
+		}
 	}
 	runCtrl.SetRunBuckets(runBuckets)
 	log.Info("run buckets", "mode", cfg.RunBuckets)
@@ -228,9 +240,8 @@ func run(log *slog.Logger) error {
 	// Try to create K8s backend (only works inside a K8s cluster).
 	var taskBackend *k8sbackend.Backend
 	var clientset kubernetes.Interface
-	k8sCfg, err := rest.InClusterConfig()
-	if err != nil {
-		log.Warn("not running in k8s cluster, TES backend disabled", "err", err)
+	if k8sErr != nil {
+		log.Warn("not running in k8s cluster, TES backend disabled", "err", k8sErr)
 	} else {
 		clientset, err = kubernetes.NewForConfig(k8sCfg)
 		if err != nil {

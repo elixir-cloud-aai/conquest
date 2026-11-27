@@ -274,3 +274,45 @@ func TestTaskPods_GetOnlyTheConfiguredSecretAndNoAPIToken(t *testing.T) {
 		t.Fatalf("task pod reads Secrets %v, want only storage-secrets", got)
 	}
 }
+
+// Runner and task pods run as the ServiceAccount configured for them
+// (CONQUEST_SERVICE_ACCOUNT; the chart's has no rights and mounts no
+// token), never one the server picks itself, such as its own.
+func TestPods_RunAsTheConfiguredPodServiceAccount(t *testing.T) {
+	const podSA = "conquest-pods"
+	for _, tc := range runnerPodCases() {
+		run := domain.NewRun("WF", "1", tc.engine, "1", nil, "", "v1", "")
+		job, err := buildRunnerJobSpec(run, RunConfig{
+			Namespace:      "services",
+			ServiceAccount: podSA,
+			PodSecurity:    tc.security,
+		}, &backend.RunnerSpec{
+			Image:             "example.com/conquest-runner:latest",
+			Command:           []string{"/usr/local/bin/conquest"},
+			StorageSecretName: "conquest-run-a",
+		}, tc.ws, tc.binding)
+		if err != nil {
+			t.Fatalf("%s: build runner job: %v", tc.name, err)
+		}
+		if got := job.Spec.Template.Spec.ServiceAccountName; got != podSA {
+			t.Fatalf("%s: runner pod runs as %q, want %q", tc.name, got, podSA)
+		}
+	}
+
+	cfg := helperTestConfig()
+	cfg.ServiceAccount = podSA
+	for name, isolated := range map[string]bool{"isolated": true, "shared": false} {
+		if isolated {
+			cfg.TaskStorageURL = func(taskID string) string { return "http://conquest.ns.svc/storage/v1/t/" + taskID + "/sig" }
+		} else {
+			cfg.TaskStorageURL = nil
+		}
+		job, err := buildJobSpec(helperTestTask(t), cfg, emptyDirWS())
+		if err != nil {
+			t.Fatalf("%s: build task job: %v", name, err)
+		}
+		if got := job.Spec.Template.Spec.ServiceAccountName; got != podSA {
+			t.Fatalf("%s: task pod runs as %q, want %q", name, got, podSA)
+		}
+	}
+}

@@ -9,8 +9,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/anuragxxd/conquest/internal/backend/remote"
 	"github.com/anuragxxd/conquest/internal/backend/routing"
@@ -27,7 +33,7 @@ func TestNewRunBuckets_SharedUsesTheConfiguredBucketAndSecret(t *testing.T) {
 		RunBuckets:        runbucket.ModeShared,
 		S3Bucket:          "conquest-workflows",
 		StorageSecretName: "storage-secrets",
-	}, testCreds)
+	}, testCreds, nil)
 	if err != nil {
 		t.Fatalf("newRunBuckets: %v", err)
 	}
@@ -44,8 +50,36 @@ func TestNewRunBuckets_SharedUsesTheConfiguredBucketAndSecret(t *testing.T) {
 }
 
 func TestNewRunBuckets_RefusesUnknownModes(t *testing.T) {
-	if _, err := newRunBuckets(&config.Config{RunBuckets: "per-run", S3Bucket: "b", StorageSecretName: "s"}, testCreds); err == nil {
+	if _, err := newRunBuckets(&config.Config{RunBuckets: "per-run", S3Bucket: "b", StorageSecretName: "s"}, testCreds, nil); err == nil {
 		t.Fatal("newRunBuckets accepted an unknown mode")
+	}
+}
+
+func TestNewRunBuckets_OBC(t *testing.T) {
+	cfg := &config.Config{
+		RunBuckets:    runbucket.ModeOBC,
+		S3Bucket:      "conquest-workflows",
+		RunBucketsOBC: runbucket.OBCConfig{Namespace: "conquest", StorageClassName: "sc", BindTimeout: time.Second},
+	}
+	clients := func() (dynamic.Interface, kubernetes.Interface, error) {
+		return dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), kubefake.NewSimpleClientset(), nil
+	}
+	p, err := newRunBuckets(cfg, testCreds, clients)
+	if err != nil {
+		t.Fatalf("newRunBuckets: %v", err)
+	}
+	if _, ok := p.(*runbucket.OBC); !ok {
+		t.Fatalf("newRunBuckets = %T, want *runbucket.OBC", p)
+	}
+
+	if _, err := newRunBuckets(cfg, testCreds, nil); err == nil {
+		t.Fatal("obc without Kubernetes clients: want an error")
+	}
+	failing := func() (dynamic.Interface, kubernetes.Interface, error) {
+		return nil, nil, errors.New("not in a cluster")
+	}
+	if _, err := newRunBuckets(cfg, testCreds, failing); err == nil || !strings.Contains(err.Error(), "not in a cluster") {
+		t.Fatalf("obc outside a cluster: %v", err)
 	}
 }
 

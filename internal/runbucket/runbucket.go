@@ -15,6 +15,8 @@
 //
 // The Shared provisioner keeps today's behaviour: every run uses the one
 // configured bucket, under its run root, with the bucket-wide credentials.
+// The OBC provisioner gives each run its own bucket through an
+// ObjectBucketClaim, with credentials for that bucket only.
 //
 // The server reaches a run's objects (workflow outputs, the storage
 // gateway's presigned URLs and listings) in the run's bucket with the run's
@@ -73,8 +75,10 @@ func ParseMode(v string) (Mode, error) {
 	switch Mode(strings.TrimSpace(v)) {
 	case "", ModeShared:
 		return ModeShared, nil
+	case ModeOBC:
+		return ModeOBC, nil
 	default:
-		return "", fmt.Errorf("%s must be %q, got %q", EnvMode, ModeShared, v)
+		return "", fmt.Errorf("%s must be %q or %q, got %q", EnvMode, ModeShared, ModeOBC, v)
 	}
 }
 
