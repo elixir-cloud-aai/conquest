@@ -326,27 +326,30 @@ reach only the run's own bucket, are planned as further values.
 
 The server follows each run's bucket too. A run's bucket is the host of
 its stored run root (`run_root_uri`), so a run keeps its bucket when the
-setting changes, and runs from before the switch stay where they are. The
-server reaches a run's objects with the run's credentials (the
-provisioner's, kept in memory and never logged; for runs in
-`CONQUEST_S3_BUCKET`, the server's own):
+setting changes, and runs from before the switch stay where they are. Runs
+without a run root, such as the stub runs of standalone TES tasks, are in
+`CONQUEST_S3_BUCKET`. The server reaches a run's objects with the run's
+credentials (the provisioner's, kept in memory and never logged; for runs
+in `CONQUEST_S3_BUCKET`, the server's own):
 
 - WES: the outputs of WDL runs are read from the run's bucket, and the log
-  URIs (`run_log.stdout`, task logs) name it.
+  URIs (`run_log.stdout`, task logs) name it (`CONQUEST_S3_BUCKET` if the
+  run root can't be read).
 - Storage gateway: each task gets only its run's bucket, other buckets
   (`CONQUEST_S3_BUCKET` included) get `403`; URLs are presigned, and
-  directory inputs listed, with the run's credentials. Tasks without a run
-  keep `CONQUEST_S3_BUCKET` (with storage isolation, the run bound gives them
-  nothing).
+  directory inputs listed, with the run's credentials. If the run's bucket
+  can't be found, the gateway answers `502`.
 - Task routing: a task may go to a remote endpoint only with `s3://` inputs
-  and outputs in its run's bucket.
+  and outputs in its run's bucket (otherwise its route record says "not the
+  run's bucket").
 
 Task pods reach a run's own bucket only through the storage gateway, the
 objectfs workspace mounts `CONQUEST_S3_BUCKET`, and remote endpoints with
 `s3_url_style` `bucket` or `endpoint` use their own access to that bucket.
-So the server refuses to start with a per-run value unless
-`CONQUEST_STORAGE_ISOLATION=true`, the workspace mode isn't `objectfs`, and
-every remote endpoint uses `s3_url_style: gateway`.
+So the values that give runs their own buckets (none yet) will refuse to
+start unless `CONQUEST_STORAGE_ISOLATION=true`, the workspace mode isn't
+`objectfs`, every remote endpoint uses `s3_url_style: gateway`, and the
+server has `CONQUEST_S3_ENDPOINT` and its own S3 credentials.
 
 Whatever the value, runner and task pods get no ServiceAccount token
 (`automountServiceAccountToken: false`, no projected token): only the

@@ -84,7 +84,62 @@ func twoRuns() *runs {
 		"b":   "s3://run-b/v1/workflow-runs/b/",
 		"old": "s3://conquest/v1/workflow-runs/old/",
 		"bad": "/v1/workflow-runs/bad/",
+		// stub run of a standalone TES task: no run root
+		"stub": "",
+		// a later provisioner might put two runs into one bucket
+		"c1": "s3://run-c/v1/workflow-runs/c1/",
+		"c2": "s3://run-c/v1/workflow-runs/c2/",
 	}}
+}
+
+// Stub runs of standalone TES tasks have no run root: they are in the
+// configured bucket, reached with the server's keys.
+func TestAccess_RunsWithoutARunRootAreInTheConfiguredBucket(t *testing.T) {
+	prov := &perRun{}
+	a, _ := newAccess(t, twoRuns(), prov)
+	bucket, c, err := a.Client(context.Background(), "stub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := c.(*fakeClient); bucket != "conquest" || f.creds.AccessKeyID != "server-key" || len(prov.calls) != 0 {
+		t.Fatalf("Client(stub) = %s, %+v, provisioner asked %v", bucket, f, prov.calls)
+	}
+}
+
+// Clients for buckets other than the configured one are per run: two runs
+// in one such bucket never share keys.
+func TestAccess_RunsSharingABucketKeepTheirOwnKeys(t *testing.T) {
+	a, _ := newAccess(t, twoRuns(), &perRun{})
+	for _, id := range []string{"c1", "c2"} {
+		_, c, err := a.Client(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f := c.(*fakeClient); f.creds.AccessKeyID != "key-"+id {
+			t.Fatalf("Client(%s) keys %s", id, f.creds.AccessKeyID)
+		}
+	}
+}
+
+// A full cache is emptied and lookups go on.
+func TestAccess_FullCacheIsEmptied(t *testing.T) {
+	r := &runs{roots: map[string]string{}}
+	for i := range maxCached + 1 {
+		id := fmt.Sprint(i)
+		r.roots[id] = "s3://run-" + id + "/v1/workflow-runs/" + id + "/"
+	}
+	a, _ := newAccess(t, r, &perRun{})
+	for i := range maxCached + 1 {
+		if _, _, err := a.Client(context.Background(), fmt.Sprint(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(a.buckets) > maxCached || len(a.clients) > maxCached {
+		t.Fatalf("caches hold %d buckets, %d clients", len(a.buckets), len(a.clients))
+	}
+	if bucket, _, err := a.Client(context.Background(), "0"); err != nil || bucket != "run-0" {
+		t.Fatalf("after emptying: %s, %v", bucket, err)
+	}
 }
 
 // Each run's client gets its own bucket and the run's own keys.

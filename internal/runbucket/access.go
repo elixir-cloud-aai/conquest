@@ -43,12 +43,14 @@ type AccessConfig struct {
 	PublicEndpoint string
 }
 
-// maxCached bounds each of Access's caches; a full cache is emptied.
+// maxCached bounds each of Access's caches; a full cache is emptied (a run's
+// bucket never changes, so nothing else invalidates them).
 const maxCached = 4096
 
 // Access gives the server a run's bucket and an S3 client with the run's
 // credentials for it. It caches buckets and clients in memory; credentials
-// never leave the clients.
+// never leave the clients. Clients for the configured bucket are shared by
+// all its runs; clients for other buckets belong to one run.
 type Access struct {
 	cfg       AccessConfig
 	runs      RunLookup
@@ -60,8 +62,9 @@ type Access struct {
 	clients map[clientKey]Client
 }
 
+// clientKey names a client; runID is empty for the configured bucket.
 type clientKey struct {
-	endpoint, bucket string
+	endpoint, bucket, runID string
 }
 
 // NewAccess returns Access to the runs' buckets. prov gives the credentials
@@ -88,7 +91,8 @@ func NewAccess(cfg AccessConfig, runs RunLookup, prov Provisioner, newClient New
 }
 
 // Bucket returns the bucket of the run's objects, the host of its stored run
-// root URI.
+// root URI. Runs without a run root, such as the stub runs of standalone TES
+// tasks, are in the configured bucket.
 func (a *Access) Bucket(ctx context.Context, runID string) (string, error) {
 	if runID == "" {
 		return "", errors.New("run bucket access: run ID is required")
@@ -103,7 +107,9 @@ func (a *Access) Bucket(ctx context.Context, runID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("run bucket access: read run %s: %w", runID, err)
 	}
-	if bucket, err = BucketOf(run.RunRootURI); err != nil {
+	if run.RunRootURI == "" {
+		bucket = a.cfg.Bucket
+	} else if bucket, err = BucketOf(run.RunRootURI); err != nil {
 		return "", fmt.Errorf("run bucket access: run %s: %w", runID, err)
 	}
 	a.mu.Lock()
@@ -133,6 +139,9 @@ func (a *Access) client(ctx context.Context, runID, endpoint string) (string, Cl
 		return "", nil, err
 	}
 	key := clientKey{endpoint: endpoint, bucket: bucket}
+	if bucket != a.cfg.Bucket {
+		key.runID = runID // the provisioner's keys are the run's
+	}
 	a.mu.Lock()
 	c, ok := a.clients[key]
 	a.mu.Unlock()

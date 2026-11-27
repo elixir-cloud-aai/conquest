@@ -141,7 +141,7 @@ func gatewayTest(t *testing.T) (*config.Config, http.Handler, func(taskID, bucke
 	}
 	t.Setenv("AWS_ACCESS_KEY_ID", testCreds.AccessKeyID)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", testCreds.SecretAccessKey)
-	runs := runsByRoot{"a": "s3://run-a/v1/workflow-runs/a/", "b": "s3://run-b/v1/workflow-runs/b/"}
+	runs := runsByRoot{"a": "s3://run-a/v1/workflow-runs/a/", "b": "s3://run-b/v1/workflow-runs/b/", "stub": ""}
 	access, err := newRunAccess(cfg, testCreds, runs, perRunBuckets{})
 	if err != nil {
 		t.Fatal(err)
@@ -149,11 +149,14 @@ func gatewayTest(t *testing.T) (*config.Config, http.Handler, func(taskID, bucke
 	payload := []byte(`{"inputs": [
 		{"url": "s3://run-a/v1/workflow-runs/a/in.txt", "path": "/work/in.txt"},
 		{"url": "s3://run-b/v1/workflow-runs/b/in.txt", "path": "/work/b.txt"},
-		{"url": "s3://conquest/v1/workflow-runs/a/in.txt", "path": "/work/shared.txt"}
+		{"url": "s3://conquest/v1/workflow-runs/a/in.txt", "path": "/work/shared.txt"},
+		{"url": "s3://conquest/v1/workflow-runs/stub/in.txt", "path": "/work/stub.txt"}
 	]}`)
 	tasks := taskByID{
 		"t1": {TaskID: "t1", RunID: "a", State: domain.StateRunning, TaskRequestPayload: payload},
 		"t0": {TaskID: "t0", State: domain.StateRunning, TaskRequestPayload: payload},
+		// standalone TES task: its stub run has no run root
+		"t2": {TaskID: "t2", RunID: "stub", State: domain.StateRunning, TaskRequestPayload: payload},
 	}
 	gw, st, err := newStorageGateway(cfg, storage.Layout{Bucket: "conquest", Version: "v1"}, tasks, access,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -194,6 +197,15 @@ func TestStorageGateway_PresignsWithTheRunsCredentials(t *testing.T) {
 	// with storage isolation, a task without a run reaches nothing
 	if rec := get("t0", "conquest", "v1/workflow-runs/a/in.txt"); rec.Code != http.StatusForbidden {
 		t.Errorf("task without a run: %d, want 403", rec.Code)
+	}
+	// a standalone TES task reaches its stub run's root in the configured
+	// bucket, with the server's key, and nothing else
+	rec = get("t2", "conquest", "v1/workflow-runs/stub/in.txt")
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusTemporaryRedirect || !strings.Contains(loc, "server-key%2F") {
+		t.Errorf("standalone task: %d to %s, want a redirect with the server's key", rec.Code, loc)
+	}
+	if rec := get("t2", "conquest", "v1/workflow-runs/a/in.txt"); rec.Code != http.StatusForbidden {
+		t.Errorf("standalone task, another run's root: %d, want 403", rec.Code)
 	}
 }
 

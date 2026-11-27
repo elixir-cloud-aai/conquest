@@ -111,7 +111,8 @@ func (c *RunController) SetTaskBackend(be backend.TaskBackend) {
 }
 
 // SetArtifactStore configures the optional artifact store used to read
-// persisted run-level artifacts such as workflow outputs.
+// persisted run-level artifacts such as workflow outputs. SetRunObjects, which
+// the server uses, takes precedence.
 func (c *RunController) SetArtifactStore(store objstore.Client) {
 	c.artifacts = store
 }

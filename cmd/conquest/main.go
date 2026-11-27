@@ -175,9 +175,13 @@ func run(log *slog.Logger) error {
 	// The server reads each run's objects in the run's bucket, with the
 	// run's credentials.
 	runAccess, err := newRunAccess(cfg, serverCreds, runStore, runBuckets)
-	if err != nil {
+	switch {
+	case cfg.RunBuckets.PerRun() && (err != nil || runAccess == nil):
+		// without it, runs in their own buckets couldn't be served
+		return fmt.Errorf("%s=%s needs CONQUEST_S3_ENDPOINT and the server's S3 credentials: %v", runbucket.EnvMode, cfg.RunBuckets, err)
+	case err != nil:
 		log.Warn("workflow outputs artifact loading disabled", "err", err)
-	} else if runAccess != nil {
+	case runAccess != nil:
 		runCtrl.SetRunObjects(runAccess)
 	}
 

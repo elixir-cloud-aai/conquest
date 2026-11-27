@@ -79,9 +79,11 @@ type gatewayRunStore struct {
 }
 
 // gatewayRunStorage serves each task the bucket of its run, with the run's
-// credentials. Tasks without a run (direct TES submissions) keep the
-// configured bucket and the server's credentials (shared); with storage
-// isolation, the run bound gives them nothing.
+// credentials. Tasks without a run keep the configured bucket and the
+// server's credentials (shared); with storage isolation, the run bound lets
+// them reach nothing. Standalone TES tasks have a stub run without a run
+// root, which Access puts in the configured bucket. Presigner and lister
+// are separate clients (public and server endpoint), each cached by Access.
 func gatewayRunStorage(access *runbucket.Access, bucket string, shared storagegw.RunStore) storagegw.RunStorage {
 	return func(ctx context.Context, task *domain.Task) (string, storagegw.RunStore, error) {
 		if task.RunID == "" {

@@ -165,15 +165,21 @@ func TestRunBuckets(t *testing.T) {
 		}
 	}
 
-	prov.asked = nil
-
 	// the storage gateway, wired with the runs' buckets
+	put(t, admin, "isolation-run-a", rootA+"dir/x.txt", "x")
+	put(t, admin, "isolation-run-a", rootA+"dir/sub/y.txt", "y")
+	put(t, admin, "isolation-run-b", rootB+"dir/z.txt", "z")
 	task := &domain.Task{TaskID: "t1", RunID: "a", State: domain.StateRunning}
 	stolen := tes.Input{URL: "s3://isolation-run-b/" + rootB + "secret.txt", Path: "/work/secret.txt"}
 	own := tes.Input{URL: "s3://isolation-run-a/" + rootA + "in.txt", Path: "/work/in.txt"}
+	ownDir := tes.Input{URL: "s3://isolation-run-a/" + rootA + "dir", Path: "/work/dir", Type: "DIRECTORY"}
+	stolenDir := tes.Input{URL: "s3://isolation-run-b/" + rootB + "dir", Path: "/work/bdir", Type: "DIRECTORY"}
 	out := tes.Output{URL: "s3://isolation-run-a/" + rootA + "out.txt", Path: "/work/out.txt"}
 	planted := tes.Output{URL: "s3://isolation-run-b/" + rootB + "planted.txt", Path: "/work/planted.txt"}
-	task.TaskRequestPayload, _ = json.Marshal(tes.Task{Inputs: []tes.Input{own, stolen}, Outputs: []tes.Output{out, planted}})
+	task.TaskRequestPayload, _ = json.Marshal(tes.Task{
+		Inputs:  []tes.Input{own, stolen, ownDir, stolenDir},
+		Outputs: []tes.Output{out, planted},
+	})
 	gw, err := storagegw.New(storagegw.Config{
 		PublicURL: "http://conquest.invalid",
 		Secret:    bytes.Repeat([]byte("s"), 32),
@@ -183,7 +189,7 @@ func TestRunBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 	gw.SetBound(isolation.RunBoundIn(layout, access.Bucket))
-	gw.SetLister(sharedClient)
+	gw.SetLister(refusingLister{}) // enables listings; the run's store must list
 	var presignedWith []string
 	gw.SetRunStorage(func(ctx context.Context, task *domain.Task) (string, storagegw.RunStore, error) {
 		bucket, client, err := access.PresignClient(ctx, task.RunID)
@@ -224,6 +230,21 @@ func TestRunBuckets(t *testing.T) {
 		t.Error("stage-in from another run's bucket: want an error")
 	}
 
+	// directory inputs are listed with the run's keys, only in its bucket
+	ownDir.Path = filepath.Join(workdir, "dir")
+	if err := filer.StageIn(ctx, client, filer.StageManifest{Workdir: workdir, Inputs: []tes.Input{ownDir}}, log); err != nil {
+		t.Fatalf("stage-in of a directory in the run's bucket: %v", err)
+	}
+	for path, want := range map[string]string{"dir/x.txt": "x", "dir/sub/y.txt": "y"} {
+		if got, err := os.ReadFile(filepath.Join(workdir, path)); err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", path, got, err, want)
+		}
+	}
+	stolenDir.Path = filepath.Join(workdir, "bdir")
+	if err := filer.StageIn(ctx, client, filer.StageManifest{Workdir: workdir, Inputs: []tes.Input{stolenDir}}, log); err == nil {
+		t.Error("stage-in of a directory in another run's bucket: want an error")
+	}
+
 	// stage-out into the run's bucket works; into the other run's, it doesn't
 	for _, o := range []*tes.Output{&out, &planted} {
 		o.Path = filepath.Join(workdir, filepath.Base(o.Path))
@@ -244,12 +265,20 @@ func TestRunBuckets(t *testing.T) {
 		t.Error("object planted in another run's bucket")
 	}
 
-	for _, id := range prov.asked {
+	for _, id := range presignedWith {
 		if id != "a" {
-			t.Fatalf("credentials of run %s used for run a's task (asked %v)", id, prov.asked)
+			t.Fatalf("run storage of run %s used for run a's task (%v)", id, presignedWith)
 		}
 	}
 	if len(presignedWith) == 0 {
 		t.Fatal("the gateway never used the run's storage")
 	}
+}
+
+// refusingLister fails every listing: the gateway must list with the run's
+// store.
+type refusingLister struct{}
+
+func (refusingLister) ListPrefix(context.Context, string, string) ([]string, error) {
+	return nil, errors.New("listed without the run's credentials")
 }
