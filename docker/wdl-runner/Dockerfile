@@ -14,7 +14,10 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 
 FROM python:3.12-slim
 
+# apt-get upgrade: the Debian security fixes the python base image doesn't
+# have yet
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends bash ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 

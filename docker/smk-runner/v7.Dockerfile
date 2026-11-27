@@ -30,7 +30,10 @@ ARG SNAKEMAKE_VERSION=7.32.4
 # Pinned for reproducible builds; see Dockerfile for why releases/latest broke.
 ARG MINIFORGE_VERSION=26.3.2-3
 
+# apt-get upgrade: the Debian security fixes the python base image doesn't
+# have yet
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
        bash bzip2 ca-certificates curl git procps build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -39,6 +42,8 @@ RUN apt-get update \
 # Miniforge ships per-architecture installers, so resolve the asset from the
 # actual build platform instead of hardcoding x86_64 -- that made arm64 builds
 # download the amd64 installer and fail.
+# Packages with fixed vulnerabilities in the pinned Miniforge's base
+# environment are raised to their fixed versions, as in Dockerfile.
 RUN set -eux; \
     case "$(uname -m)" in \
         x86_64)  MINIFORGE_ARCH=x86_64 ;; \
@@ -47,13 +52,22 @@ RUN set -eux; \
     esac; \
     curl -fsSL "https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-${MINIFORGE_VERSION}-Linux-${MINIFORGE_ARCH}.sh" -o /tmp/miniforge.sh; \
     bash /tmp/miniforge.sh -b -p /opt/conda; \
-    rm /tmp/miniforge.sh
+    rm /tmp/miniforge.sh; \
+    py="$(/opt/conda/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"; \
+    CONDA_AUTO_UPDATE_CONDA=false /opt/conda/bin/conda install -y -n base \
+        --override-channels -c conda-forge \
+        "python=${py}" "brotli-python>=1.2.1" "certifi>=2026.10.18" \
+        "msgpack-python>=1.2.3" "urllib3>=2.8.0"; \
+    /opt/conda/bin/conda clean -py
 
 ENV PATH=/opt/conda/bin:$PATH
 
 # Install the SM7 Python stack with the system Python 3.11 runtime.
 # pandas<2 does not have wheels for newer Python versions pulled in by Miniforge.
+# setuptools: 80.10.2 vendors fixed jaraco.context and wheel; <81 keeps
+# pkg_resources, which snakemake.utils.min_version() of SM7 imports.
 RUN /usr/local/bin/python -m pip install --no-cache-dir --upgrade pip \
+       "setuptools>=80.10.2,<81" \
     && /usr/local/bin/python -m pip install --no-cache-dir \
        "snakemake==${SNAKEMAKE_VERSION}" \
        "numpy<2" \

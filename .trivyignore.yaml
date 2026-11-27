@@ -1,4 +1,13 @@
 # Accepted Trivy findings, left out of every image scan (.github/workflows/ghcr.yaml).
 # Each entry needs a reason (statement) and, where possible, an expiry date. See
 # https://trivy.dev/latest/docs/configuration/filtering/#trivyignoreyaml
-vulnerabilities: []
+vulnerabilities:
+  # Snakemake images. Found through pip's SBOM (pip/_vendor/bom.cdx.json),
+  # hence no path: pip vendors only pkg_resources from setuptools 70.3.0,
+  # not setuptools.package_index, where the path traversal is. No pip
+  # release vendors a newer setuptools yet.
+  - id: CVE-2025-47273
+    purls:
+      - pkg:pypi/setuptools@70.3.0
+    statement: pip vendors only pkg_resources of setuptools 70.3.0, not the vulnerable package_index
+    expired_at: 2027-01-31
