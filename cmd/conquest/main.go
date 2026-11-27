@@ -37,6 +37,7 @@ import (
 	"github.com/anuragxxd/conquest/internal/objstore"
 	"github.com/anuragxxd/conquest/internal/reconciler"
 	"github.com/anuragxxd/conquest/internal/repository/pg"
+	"github.com/anuragxxd/conquest/internal/runbucket"
 	"github.com/anuragxxd/conquest/internal/runnerauth"
 	"github.com/anuragxxd/conquest/internal/storage"
 	"github.com/anuragxxd/conquest/internal/storagegw"
@@ -164,16 +165,20 @@ func run(log *slog.Logger) error {
 
 	// Controller.
 	runCtrl := controller.NewRunController(runStore, taskStore, eventStore, layout, adapterRegistry, log)
-	runBuckets, err := newRunBuckets(cfg)
+	serverCreds := serverCredentials()
+	runBuckets, err := newRunBuckets(cfg, serverCreds)
 	if err != nil {
 		return err
 	}
 	runCtrl.SetRunBuckets(runBuckets)
 	log.Info("run buckets", "mode", cfg.RunBuckets)
-	if artifactStore, err := newServerArtifactStore(cfg); err != nil {
+	// The server reads each run's objects in the run's bucket, with the
+	// run's credentials.
+	runAccess, err := newRunAccess(cfg, serverCreds, runStore, runBuckets)
+	if err != nil {
 		log.Warn("workflow outputs artifact loading disabled", "err", err)
-	} else if artifactStore != nil {
-		runCtrl.SetArtifactStore(artifactStore)
+	} else if runAccess != nil {
+		runCtrl.SetRunObjects(runAccess)
 	}
 
 	// Workspace config is shared between task and run backends.
@@ -208,7 +213,7 @@ func run(log *slog.Logger) error {
 	var gateway *storagegw.Gateway
 	var gatewayStore remote.Storage
 	if cfg.StorageIsolation {
-		gateway, gatewayStore, err = newStorageGateway(cfg, layout, taskStore, log)
+		gateway, gatewayStore, err = newStorageGateway(cfg, layout, taskStore, runAccess, log)
 		if err != nil {
 			return err
 		}
@@ -298,8 +303,11 @@ func run(log *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := checkFederationRunBuckets(cfg.RunBuckets, fedCfg); err != nil {
+				return err
+			}
 			if gateway == nil {
-				gateway, gatewayStore, err = newStorageGateway(cfg, layout, taskStore, log)
+				gateway, gatewayStore, err = newStorageGateway(cfg, layout, taskStore, runAccess, log)
 				if err != nil {
 					return err
 				}
@@ -460,40 +468,42 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-func newServerArtifactStore(cfg *config.Config) (objstore.Client, error) {
-	if cfg == nil || strings.TrimSpace(cfg.S3Endpoint) == "" {
-		return nil, nil
-	}
-	accessKey := strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
-	secretKey := strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY"))
-	if accessKey == "" || secretKey == "" {
-		return nil, fmt.Errorf("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
-	}
-
-	useSSL := strings.HasPrefix(cfg.S3Endpoint, "https://")
-	cleanEndpoint := strings.TrimPrefix(strings.TrimPrefix(cfg.S3Endpoint, "https://"), "http://")
-	return objstore.NewS3Client(objstore.S3Config{
-		Endpoint:  cleanEndpoint,
-		AccessKey: accessKey,
-		SecretKey: secretKey,
-		Region:    cfg.S3Region,
-		UseSSL:    useSSL,
-	})
-}
-
 // gatewayStorage gives remote backends gateway URLs and S3 listings.
 type gatewayStorage struct {
 	*storagegw.Gateway
 	lister *objstore.S3Client
+	// with run buckets: each task's run's bucket and credentials
+	tasks storagegw.TaskLookup
+	runs  storagegw.RunStorage
 }
 
 func (g gatewayStorage) ListPrefix(ctx context.Context, bucket, prefix string) ([]string, error) {
 	return g.lister.ListPrefix(ctx, bucket, prefix)
 }
 
+// ListTaskPrefix lists in the bucket of the task's run, with its credentials.
+func (g gatewayStorage) ListTaskPrefix(ctx context.Context, taskID, bucket, prefix string) ([]string, error) {
+	if g.runs == nil {
+		return g.ListPrefix(ctx, bucket, prefix)
+	}
+	task, err := g.tasks.Get(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("task %s: %w", taskID, err)
+	}
+	runBucket, store, err := g.runs(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	if bucket != runBucket {
+		return nil, fmt.Errorf("bucket %q is not the bucket of task %s's run", bucket, taskID)
+	}
+	return store.ListPrefix(ctx, bucket, prefix)
+}
+
 // newStorageGateway creates the storage gateway if CONQUEST_STORAGE_GATEWAY_URL
-// is set or storage isolation is on; otherwise it returns nils.
-func newStorageGateway(cfg *config.Config, layout storage.Layout, tasks storagegw.TaskLookup, log *slog.Logger) (*storagegw.Gateway, remote.Storage, error) {
+// is set or storage isolation is on; otherwise it returns nils. With access,
+// each task gets only its run's bucket, with the run's credentials.
+func newStorageGateway(cfg *config.Config, layout storage.Layout, tasks storagegw.TaskLookup, access *runbucket.Access, log *slog.Logger) (*storagegw.Gateway, remote.Storage, error) {
 	if cfg.StorageGatewayURL == "" && !cfg.StorageIsolation {
 		return nil, nil, nil
 	}
@@ -536,11 +546,21 @@ func newStorageGateway(cfg *config.Config, layout storage.Layout, tasks storageg
 	if err != nil {
 		return nil, nil, err
 	}
+	st := gatewayStorage{Gateway: gw, lister: lister}
+	if access != nil {
+		st.tasks = tasks
+		st.runs = gatewayRunStorage(access, cfg.S3Bucket, gatewayRunStore{Presigner: presigner, Lister: lister})
+		gw.SetRunStorage(st.runs)
+	}
 	if cfg.StorageIsolation {
-		gw.SetBound(isolation.RunBound(layout))
+		if access != nil {
+			gw.SetBound(isolation.RunBoundIn(layout, access.Bucket))
+		} else {
+			gw.SetBound(isolation.RunBound(layout))
+		}
 		gw.SetLister(lister)
 		log.Info("storage isolation enabled: task pods get no S3 credentials", "gateway_url", cfg.InternalBaseURL, "s3_presign_endpoint", public)
 	}
 	log.Info("storage gateway enabled", "public_url", cfg.StorageGatewayURL, "s3_public_endpoint", public)
-	return gw, gatewayStorage{Gateway: gw, lister: lister}, nil
+	return gw, st, nil
 }
