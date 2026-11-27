@@ -126,6 +126,10 @@ type Config struct {
 	// see runbucket.ParseOBCConfig); its Namespace is K8sNamespace. Zero
 	// for other modes.
 	RunBucketsOBC runbucket.OBCConfig
+	// RunRetention is how long a terminal run's data (its objects, or its
+	// own bucket) stays before it is deleted (CONQUEST_RUN_RETENTION, see
+	// internal/retention). 0: forever (the default). Needs S3Endpoint.
+	RunRetention time.Duration
 
 	// RunnerSecret derives each run's runner token (see
 	// internal/runnerauth; at least 32 bytes). Set: the runner callback API
@@ -330,7 +334,19 @@ func Load() (*Config, error) {
 		if c.RunBucketsOBC, err = runbucket.ParseOBCConfig(os.Getenv); err != nil {
 			return nil, err
 		}
+		// The server sets Instance from the database (pg.InstanceID).
 		c.RunBucketsOBC.Namespace = c.K8sNamespace
+	}
+
+	if v := strings.TrimSpace(os.Getenv("CONQUEST_RUN_RETENTION")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return nil, fmt.Errorf("CONQUEST_RUN_RETENTION must be a duration such as 720h (0: off), got %q", v)
+		}
+		c.RunRetention = d
+	}
+	if c.RunRetention > 0 && c.S3Endpoint == "" {
+		return nil, fmt.Errorf("CONQUEST_RUN_RETENTION needs CONQUEST_S3_ENDPOINT to delete runs' objects")
 	}
 
 	if c.RunnerSecret != "" && len(c.RunnerSecret) < runnerauth.MinSecretBytes {

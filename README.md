@@ -350,6 +350,7 @@ metadata:
   name: conquest-run-<run ID>
   labels:
     conquest.io/run-id: <run ID>
+    conquest.io/instance: <instance ID>   # this Conquest's, from its database
     app.kubernetes.io/managed-by: conquest
 spec:
   generateBucketName: conquest-run-
@@ -380,10 +381,15 @@ Conquest adopts an existing claim of the same name only if it carries the
 run's `conquest.io/run-id` label and isn't being deleted, and deletes only
 claims with that label. Deleting a claim deletes its bucket if the
 StorageClass's `reclaimPolicy` is `Delete`; Rook then deletes the bucket
-with all its objects. Conquest deletes claims only of runs that fail
-before they are stored (see above); claims of stored runs stay until an
-operator deletes them (`kubectl delete objectbucketclaims -l
-conquest.io/run-id=<run ID>`).
+with all its objects. Conquest deletes the claims of runs that fail
+before they are stored (see above) and, with run retention on, the claims
+of runs that ended longer ago than the retention period and the claims
+left without a run (see [Run retention](#run-retention)). Without run
+retention, the claims of stored runs stay. The `conquest.io/instance`
+label (a random ID that the database makes once, table `instance`) tells
+Conquests in one namespace apart: each looks for claims without a run
+only among its own. Conquests that share a database share the ID, as
+they share the runs.
 
 Operator requirements:
 
@@ -401,12 +407,14 @@ Operator requirements:
   (`CONQUEST_SERVICE_ACCOUNT`, see [Pod Security](#pod-security)): the
   server refuses to start if they would run as its own account.
 - RBAC: the server's ServiceAccount needs, in Conquest's namespace,
-  `create`, `get` and `delete` on `objectbucketclaims.objectbucket.io`
-  and `get` on `secrets` and `configmaps` (the chart's Role has them with
-  `obc`). RBAC can't limit `get` to a name prefix, so the server may read
-  every Secret in the namespace; runner and task pods have no token, so
-  workflow code can't. Give Conquest a namespace of its own, so that the
-  server's account reaches no Secrets of other applications.
+  `create`, `get`, `list` and `delete` on
+  `objectbucketclaims.objectbucket.io` (`list` for run retention's sweep
+  for claims without a run) and `get` on `secrets` and `configmaps` (the
+  chart's Role has them with `obc`). RBAC can't limit `get` to a name
+  prefix, so the server may read every Secret in the namespace; runner
+  and task pods have no token, so workflow code can't. Give Conquest a
+  namespace of its own, so that the server's account reaches no Secrets
+  of other applications.
 
 [rook-obc]: https://rook.io/docs/rook/latest/Storage-Configuration/Object-Storage-RGW/ceph-object-bucket-claim/
 [lbp]: https://github.com/kube-object-storage/lib-bucket-provisioner
@@ -421,7 +429,8 @@ in `CONQUEST_S3_BUCKET`, the server's own):
 
 - WES: the outputs of WDL runs are read from the run's bucket, and the log
   URIs (`run_log.stdout`, task logs) name it (`CONQUEST_S3_BUCKET` if the
-  run root can't be read).
+  run root can't be read). Runs whose data was deleted (see
+  [Run retention](#run-retention)) have neither.
 - Storage gateway: each task gets only its run's bucket, other buckets
   (`CONQUEST_S3_BUCKET` included) get `403`; URLs are presigned, and
   directory inputs listed, with the run's credentials; with storage
@@ -449,6 +458,63 @@ run's. Task pods get no Secret at all with storage isolation; without it,
 they get the bucket-wide `CONQUEST_STORAGE_SECRET_NAME`. Tests in
 `internal/backend/k8s` (`runbucket_test.go`) hold this for every engine,
 workspace mode and pod security profile.
+
+### Run retention
+
+`CONQUEST_RUN_RETENTION` (chart: `runRetention`), a Go duration such as
+`720h` (30 days), deletes each run's data automatically once the run has
+been in a terminal state (`COMPLETE`, `EXECUTOR_ERROR`, `SYSTEM_ERROR`,
+`CANCELED`, `PREEMPTED`) for longer than that (`internal/retention`). It
+is off by default (empty or `0`): nothing is deleted. It needs
+`CONQUEST_S3_ENDPOINT` and the server's own S3 credentials. Operators run
+nothing by hand.
+
+Every server replica runs the sweep; a lease in the database (table
+`leases`) lets one replica at a time sweep, every 15 minutes (the first
+sweep right after the start). For each run that ended before now minus the
+retention period and still has its data, oldest first, the sweep deletes
+
+1. the run's remaining runner and task Jobs and its workspace (PVC, and
+   the PV of `objectfs`), as the run reconciler does when the run ends;
+2. the run's data, wherever the run is (see Run buckets: a run keeps its
+   bucket when `CONQUEST_RUN_BUCKETS` changes):
+   - a run in `CONQUEST_S3_BUCKET` (`shared`, and runs from before a switch
+     to `obc`): every object below its run root
+     (`<layout version>/workflow-runs/<run ID>/`), and nothing else; the
+     bucket stays;
+   - a run in its own bucket (`obc`): its ObjectBucketClaim. With the
+     StorageClass's `reclaimPolicy: Delete`, the bucket provisioner then
+     deletes the bucket with all its objects (Rook deletes non-empty
+     buckets) and the bucket's user; with `Retain`, the bucket stays;
+3. and records the time in the run's `data_deleted_at`.
+
+A step that fails leaves the run as it is, and the next sweep tries again
+(every step can be repeated). A run whose bucket is neither
+`CONQUEST_S3_BUCKET` nor one that `obc` makes (for example after
+`CONQUEST_S3_BUCKET` was renamed) is never recorded as deleted: each
+sweep logs that it can't place the run's data, before it touches the
+cluster. A run in a `conquest-run-*` bucket counts as done once its claim
+is gone from Conquest's namespace: so don't give `CONQUEST_S3_BUCKET` a
+name starting with `conquest-run-`, and keep Conquest in its namespace
+while runs there have their own buckets (claims left in an old namespace
+are neither found nor deleted). The sweep deletes the current versions
+of objects only, so `CONQUEST_S3_BUCKET` must not have versioning turned
+on, or older versions of run data stay.
+
+The run itself stays: it lists as before, `GET /runs/{run_id}` answers `200` with its state, times and request but
+without `outputs` and `run_log.stdout`, and the run's and its tasks' logs
+(`GET /runs/{run_id}/tasks`, `/tasks/{task_id}`) carry no log URI but a
+`system_logs` entry saying that the run's data was deleted, and when.
+TES tasks keep what the database holds (state, exit codes, logs read from
+pods); their `s3://` inputs and outputs below the run root are gone.
+
+With `obc`, the sweep also deletes claims without a run: claims of this
+Conquest (label `conquest.io/instance`), older than one hour, whose run
+was never stored (a submission that failed after the claim was made and
+whose clean-up failed too, or a server that stopped in between) or whose
+run's data is recorded as deleted already. Claims made before this label
+existed are not among them; their runs' claims are still deleted with
+their runs' data.
 
 ## GA4GH APIs
 
@@ -923,6 +989,13 @@ bucket provisioner that binds claims and creates their Secret and
 ConfigMap (`internal/runbucket/obc_test.go`); no test runs a real
 ObjectBucketClaim provisioner.
 
+Run retention's sweep is tested with a fake clock, an in-memory run store
+and lease table, and fake provisioners (`internal/retention`); the
+retention queries and leases against PostgreSQL
+(`internal/repository/pg/retention_integration_test.go`), and the deletion
+of a run's objects in the shared bucket against SeaweedFS
+(`internal/isolation/retention_integration_test.go`).
+
 The chart's render tests (`deploy/chart_test.go`) run `helm template`; they
 skip without `helm` on the `PATH`, except in CI (`CI=true`).
 
@@ -955,6 +1028,7 @@ No config files.
 | `CONQUEST_RUN_BUCKETS_OBC_MAX_SIZE` | —                    | Size quota of each run bucket, e.g. `10Gi` (`obc`) |
 | `CONQUEST_RUN_BUCKETS_OBC_MAX_OBJECTS` | —                 | Object quota of each run bucket (`obc`) |
 | `CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` | `20s`            | Wait for a run's claim to be Bound, at most `20s` (`obc`) |
+| `CONQUEST_RUN_RETENTION`            | — (off)              | Delete a run's data this long after it ended, e.g. `720h` (see Run retention) |
 | `CONQUEST_SERVICE_ACCOUNT`          | `conquest`           | ServiceAccount of runner and task pods; never the server's, so override the default (the chart does; see Pod Security) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
@@ -1031,6 +1105,10 @@ authenticated.
   storage class or with the objectfs workspace. With `shared`, let only
   trusted callers create runs (`create.entitlements`), process only data
   that isn't sensitive, and tell users about this limit.
+- **Run retention** (see Run retention): `runRetention` (e.g. `720h`)
+  deletes each run's data, and with `obc` its bucket, once the run ended
+  longer ago; empty (the default) deletes nothing. Tell users how long
+  their outputs stay.
 - **Pods' ServiceAccount** (see Pod Security): the chart creates
   `<conquest.appname>-pods` (default `conquest-pods`), without Role and
   token, and runs runner and task pods as it (`conquest.podServiceAccount`;
@@ -1062,6 +1140,7 @@ storageIsolation:
   obc:
     storageClassName: <bucket StorageClass>   # e.g. a Rook object bucket class
     maxSize: 100Gi                  # optional per-run quota
+runRetention: 720h                  # delete run data 30 days after the run ended
 ```
 
 Upgrading: drain active runs before switching authentication on (see
@@ -1080,6 +1159,18 @@ their run root in `CONQUEST_S3_BUCKET` and stay readable with the server's
 keys; only new runs get their own buckets. Switching back to `shared` makes
 the runs in their own buckets unreadable for the server (it then has only
 its own keys), and their claims and buckets stay until deleted.
+Run retention (`runRetention`, `CONQUEST_RUN_RETENTION`) is off by default,
+so the upgrade to a chart with it deletes nothing; its database migration
+(`000010`, column `runs.data_deleted_at` and tables `leases` and
+`instance`) runs with the
+chart's migration init container as usual. Turning it on deletes, at the
+first sweep (within minutes of the rollout), the data of every run that
+ended longer ago than the retention period, including runs from before the
+upgrade: copy what you want to keep first. Shortening the period later
+does the same for the runs it newly covers. With `obc`, the chart's Role
+gains `list` on ObjectBucketClaims (for the sweep for claims without a
+run); outside the chart, grant it before turning retention on, or that
+sweep logs an error each time (the rest works).
 The chart now runs runner and task pods as `<conquest.appname>-pods`
 instead of the server's account (the default values set
 `CONQUEST_SERVICE_ACCOUNT: conquest` before); Jobs created before keep

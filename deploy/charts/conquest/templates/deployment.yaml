@@ -287,6 +287,10 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- end }}
+            {{- with .Values.runRetention }}
+            - name: CONQUEST_RUN_RETENTION
+              value: {{ . | quote }}
+            {{- end }}
             - name: CONQUEST_RUNNER_SECRET
               valueFrom:
                 secretKeyRef:

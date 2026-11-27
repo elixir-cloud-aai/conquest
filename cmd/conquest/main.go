@@ -169,6 +169,13 @@ func run(log *slog.Logger) error {
 	// The Kubernetes API: runner and task Jobs, and obc run buckets. Only
 	// inside a cluster.
 	k8sCfg, k8sErr := rest.InClusterConfig()
+	if cfg.RunBuckets == runbucket.ModeOBC {
+		// claims carry this Conquest's identity: the orphan sweep of run
+		// retention lists only its own
+		if cfg.RunBucketsOBC.Instance, err = pg.InstanceID(ctx, pool); err != nil {
+			return err
+		}
+	}
 	runBuckets, err := newRunBuckets(cfg, serverCreds, inClusterClients(k8sCfg, k8sErr))
 	if err != nil {
 		return err
@@ -194,6 +201,13 @@ func run(log *slog.Logger) error {
 		log.Warn("workflow outputs artifact loading disabled", "err", err)
 	case runAccess != nil:
 		runCtrl.SetRunObjects(runAccess)
+	}
+	runRetention, err := newRunRetention(cfg, serverCreds, runBuckets, runStore, pg.NewLeases(pool), log)
+	if err != nil {
+		return err
+	}
+	if runRetention != nil {
+		log.Info("run retention on: run data is deleted once runs ended longer ago than the retention period", "retention", cfg.RunRetention)
 	}
 
 	// Workspace config is shared between task and run backends.
@@ -437,6 +451,16 @@ func run(log *slog.Logger) error {
 		runRec := reconciler.NewRunReconciler(runStore, eventStore, runBackend, recCfg, log)
 		runRec.SetWorkspaceCleaner(runBackend.WorkspaceStrategy())
 		go runRec.Run(appCtx)
+	}
+
+	// Run retention: deletes the data of runs that ended longer ago than
+	// CONQUEST_RUN_RETENTION, after their remaining Jobs and workspaces.
+	if runRetention != nil {
+		if runBackend != nil {
+			runRetention.SetJobs(runBackend)
+			runRetention.SetWorkspace(runBackend.WorkspaceStrategy())
+		}
+		go runRetention.Run(appCtx)
 	}
 
 	// HTTP server with graceful shutdown.

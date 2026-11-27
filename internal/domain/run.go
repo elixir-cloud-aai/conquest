@@ -34,6 +34,10 @@ type Run struct {
 	FinishedAt            *time.Time        `json:"finished_at,omitempty"`
 	ErrorSummary          string            `json:"error_summary,omitempty"`
 	Workspace             *WorkspaceBinding `json:"workspace,omitempty"`
+	// DataDeletedAt is when the run's data (its objects, or its own bucket)
+	// was deleted after the retention period (package retention); nil while
+	// the data exists.
+	DataDeletedAt *time.Time `json:"data_deleted_at,omitempty"`
 	// Owner identifies the caller that created the run (see package
 	// ownership); empty for runs created without authentication.
 	// AuthContext records how the owner authenticated (identifiers only).

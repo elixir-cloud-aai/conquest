@@ -2,6 +2,8 @@ package objstore
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"time"
@@ -82,6 +84,55 @@ func (c *S3Client) ListPrefix(ctx context.Context, bucket, prefix string) ([]str
 		keys = append(keys, obj.Key)
 	}
 	return keys, nil
+}
+
+// DeletePrefix deletes every object whose key starts with prefix, in
+// batches (S3 DeleteObjects) as it lists them. Nothing to delete is no
+// error. It refuses an empty prefix, which would empty the bucket.
+func (c *S3Client) DeletePrefix(ctx context.Context, bucket, prefix string) error {
+	if prefix == "" {
+		return errors.New("delete prefix: empty prefix")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	listErr := make(chan error, 1)
+	toDelete := make(chan minio.ObjectInfo)
+	go func() {
+		defer close(toDelete)
+		for obj := range c.mc.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+			if obj.Err != nil {
+				listErr <- obj.Err
+				return
+			}
+			select {
+			case toDelete <- obj:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	var firstErr error
+	for res := range c.mc.RemoveObjects(ctx, bucket, toDelete, minio.RemoveObjectsOptions{}) {
+		if firstErr == nil && res.Err != nil {
+			firstErr = fmt.Errorf("delete prefix: delete %s: %w", res.ObjectName, res.Err)
+			cancel() // stop listing; the rest goes next time
+		}
+	}
+	// RemoveObjects returns once toDelete is closed or ctx is done; a list
+	// error is sent before toDelete is closed.
+	select {
+	case err := <-listErr:
+		if firstErr == nil {
+			firstErr = fmt.Errorf("delete prefix: list %s: %w", prefix, err)
+		}
+	default:
+	}
+	if firstErr == nil {
+		if err := ctx.Err(); err != nil {
+			firstErr = fmt.Errorf("delete prefix: %w", err)
+		}
+	}
+	return firstErr
 }
 
 // Presign returns a URL that performs method (GET, HEAD or PUT) on the

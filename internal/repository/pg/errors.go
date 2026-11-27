@@ -1,11 +1,17 @@
 package pg
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/anuragxxd/conquest/internal/repository"
+)
 
 // Sentinel errors for repository operations.
 var (
-	// ErrNotFound is returned when the requested entity does not exist.
-	ErrNotFound = errors.New("not found")
+	// ErrNotFound is returned when the requested entity does not exist;
+	// it is repository.ErrNotFound, for callers that know only the
+	// interfaces.
+	ErrNotFound = repository.ErrNotFound
 
 	// ErrConcurrentUpdate is returned when an optimistic-locking update
 	// finds that the row's state has already changed (0 rows affected).

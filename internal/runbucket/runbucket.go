@@ -36,6 +36,8 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+
+	"github.com/anuragxxd/conquest/internal/storage"
 )
 
 // EnvMode is the setting that selects the provisioner.
@@ -141,8 +143,8 @@ type Provisioner interface {
 	// Credentials returns the S3 keys for the run's bucket, as in the Secret
 	// its runner gets, for the server's own reads and writes there.
 	Credentials(ctx context.Context, runID string) (Credentials, error)
-	// Delete removes what Ensure created for the run, data included. It
-	// succeeds if there is nothing to remove.
+	// Delete removes the run's data: its objects, and what Ensure created
+	// for it. It succeeds if there is nothing to remove.
 	Delete(ctx context.Context, runID string) error
 }
 
@@ -150,6 +152,15 @@ type Provisioner interface {
 type Shared struct {
 	bucket Bucket
 	creds  Credentials
+	// objects deletes a run's objects (SetObjects); nil: Delete fails.
+	objects       PrefixDeleter
+	layoutVersion string
+}
+
+// PrefixDeleter deletes every object below a key prefix;
+// objstore.S3Client satisfies it.
+type PrefixDeleter interface {
+	DeletePrefix(ctx context.Context, bucket, prefix string) error
 }
 
 var _ Provisioner = (*Shared)(nil)
@@ -187,8 +198,42 @@ func (s *Shared) Credentials(context.Context, string) (Credentials, error) {
 	return s.creds, nil
 }
 
-// Delete does nothing: the shared bucket belongs to every run, and Ensure
-// created nothing for this one.
-func (s *Shared) Delete(context.Context, string) error {
+// SetObjects makes Delete delete a run's objects with objects, below the
+// run's root in layout version layoutVersion (storage.Layout).
+func (s *Shared) SetObjects(objects PrefixDeleter, layoutVersion string) {
+	s.objects, s.layoutVersion = objects, layoutVersion
+}
+
+// Delete deletes the run's objects: everything below its run root in the
+// shared bucket, which itself stays. It fails without SetObjects.
+func (s *Shared) Delete(ctx context.Context, runID string) error {
+	return s.deleteRoot(ctx, s.layoutVersion, runID)
+}
+
+// deleteRoot deletes everything below the run's root in layout version
+// version.
+func (s *Shared) deleteRoot(ctx context.Context, version, runID string) error {
+	if s.objects == nil {
+		return fmt.Errorf("shared run bucket: no object store to delete the objects of run %s", runID)
+	}
+	root, err := runRoot(version, runID)
+	if err != nil {
+		return err
+	}
+	if err := s.objects.DeletePrefix(ctx, s.bucket.Name, root); err != nil {
+		return fmt.Errorf("shared run bucket: delete the objects of run %s: %w", runID, err)
+	}
 	return nil
+}
+
+// runRoot returns the key prefix of the run's root in layout version
+// version. It refuses run IDs and versions that aren't one key segment of
+// their own: their root could reach other runs' objects.
+func runRoot(version, runID string) (string, error) {
+	for _, v := range []string{version, runID} {
+		if v == "" || v == "." || strings.Contains(v, "..") || strings.ContainsAny(v, `/\`) {
+			return "", fmt.Errorf("run bucket: run %q in layout version %q has no run root of its own", runID, version)
+		}
+	}
+	return storage.Layout{Version: version}.RunRoot(runID), nil
 }

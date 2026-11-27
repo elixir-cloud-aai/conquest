@@ -49,6 +49,15 @@ const MaxOBCBindTimeout = 20 * time.Second
 // deletes only claims that carry its run's ID.
 const RunIDLabel = "conquest.io/run-id"
 
+// InstanceLabel labels each claim with the Conquest instance that made it
+// (OBCConfig.Instance), so that an instance lists only its own claims when
+// it looks for claims without a run: other instances in the same namespace
+// keep their runs in other databases.
+const InstanceLabel = "conquest.io/instance"
+
+// labelValuePattern admits Kubernetes label values (up to 63 characters).
+var labelValuePattern = regexp.MustCompile(`^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$`)
+
 // OBCNamePrefix starts the name of each run's claim, and so of the Secret
 // and ConfigMap the bucket provisioner creates for it, and the bucket names
 // the provisioner generates.
@@ -101,6 +110,13 @@ type OBCConfig struct {
 	// it stops waiting that long before the deadline, and creates no claim
 	// with less time left. Default DefaultOBCReserve.
 	Reserve time.Duration
+	// Instance names this Conquest in the InstanceLabel of its claims (the
+	// server uses the random ID its database holds, pg.InstanceID); empty:
+	// no label, and ListRunBuckets fails.
+	Instance string
+	// ListPageSize is how many claims ListRunBuckets reads per request
+	// (default 500).
+	ListPageSize int64
 }
 
 // DefaultOBCReserve is the default of OBCConfig.Reserve.
@@ -171,6 +187,11 @@ func NewOBC(dyn dynamic.Interface, kube kubernetes.Interface, cfg OBCConfig) (*O
 		return nil, fmt.Errorf("obc run buckets: %s is required", EnvOBCStorageClass)
 	case cfg.BindTimeout <= 0:
 		return nil, errors.New("obc run buckets: bind timeout must be above 0")
+	case !labelValuePattern.MatchString(cfg.Instance):
+		return nil, fmt.Errorf("obc run buckets: instance %q is no label value", cfg.Instance)
+	}
+	if cfg.ListPageSize <= 0 {
+		cfg.ListPageSize = 500
 	}
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 500 * time.Millisecond
@@ -265,10 +286,14 @@ func (p *OBC) newClaim(name, runID string) *unstructured.Unstructured {
 	obj.SetKind("ObjectBucketClaim")
 	obj.SetName(name)
 	obj.SetNamespace(p.cfg.Namespace)
-	obj.SetLabels(map[string]string{
+	labels := map[string]string{
 		RunIDLabel:                     runID,
 		"app.kubernetes.io/managed-by": "conquest",
-	})
+	}
+	if p.cfg.Instance != "" {
+		labels[InstanceLabel] = p.cfg.Instance
+	}
+	obj.SetLabels(labels)
 	return obj
 }
 
@@ -389,4 +414,43 @@ func (p *OBC) Delete(ctx context.Context, runID string) error {
 		return fmt.Errorf("obc run buckets: delete claim %s: %w", name, err)
 	}
 	return nil
+}
+
+var _ BucketLister = (*OBC)(nil)
+
+// OwnsBucket reports whether the bucket can be one of this provisioner's:
+// its claims have the provisioner generate names from OBCNamePrefix.
+func (p *OBC) OwnsBucket(bucket string) bool {
+	return strings.HasPrefix(bucket, OBCNamePrefix)
+}
+
+// ListRunBuckets lists this instance's claims (InstanceLabel) that carry a
+// run ID and aren't being deleted, with their run IDs and creation times.
+// It fails without an instance: it would list other instances' claims.
+func (p *OBC) ListRunBuckets(ctx context.Context) ([]OwnedBucket, error) {
+	if p.cfg.Instance == "" {
+		return nil, errors.New("obc run buckets: listing claims needs an instance")
+	}
+	opts := metav1.ListOptions{
+		LabelSelector: RunIDLabel + "," + InstanceLabel + "=" + p.cfg.Instance,
+		Limit:         p.cfg.ListPageSize,
+	}
+	var owned []OwnedBucket
+	for {
+		list, err := p.claims().List(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("obc run buckets: list claims: %w", err)
+		}
+		for i := range list.Items {
+			obj := &list.Items[i]
+			runID := obj.GetLabels()[RunIDLabel]
+			if obj.GetDeletionTimestamp() != nil || runID == "" {
+				continue
+			}
+			owned = append(owned, OwnedBucket{RunID: runID, Created: obj.GetCreationTimestamp().Time})
+		}
+		if opts.Continue = list.GetContinue(); opts.Continue == "" {
+			return owned, nil
+		}
+	}
 }

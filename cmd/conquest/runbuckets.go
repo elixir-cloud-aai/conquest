@@ -98,13 +98,19 @@ func newRunAccess(cfg *config.Config, creds runbucket.Credentials, runs runbucke
 // newS3Client returns a factory of S3 clients in region.
 func newS3Client(region string) runbucket.NewClientFunc {
 	return func(endpoint string, creds runbucket.Credentials) (runbucket.Client, error) {
-		return objstore.NewS3Client(objstore.S3Config{
-			Endpoint:  strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://"),
-			AccessKey: creds.AccessKeyID,
-			SecretKey: creds.SecretAccessKey,
-			Region:    region,
-			UseSSL:    strings.HasPrefix(endpoint, "https://"),
-		})
+		return objstore.NewS3Client(s3Config(endpoint, region, creds))
+	}
+}
+
+// s3Config returns the config of an S3 client for an endpoint
+// (http(s)://host[:port]) in region that signs with creds.
+func s3Config(endpoint, region string, creds runbucket.Credentials) objstore.S3Config {
+	return objstore.S3Config{
+		Endpoint:  strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://"),
+		AccessKey: creds.AccessKeyID,
+		SecretKey: creds.SecretAccessKey,
+		Region:    region,
+		UseSSL:    strings.HasPrefix(endpoint, "https://"),
 	}
 }
 

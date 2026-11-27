@@ -74,7 +74,7 @@ const runColumns = `run_id, workflow_type, workflow_type_version,
 	backend_ref, backend_state,
 	created_at, updated_at, started_at, finished_at, error_summary,
 	workspace_kind, workspace_claim_name, workspace_access_mode,
-	workspace_pv_name, owner, auth_context`
+	workspace_pv_name, owner, auth_context, data_deleted_at`
 
 // scanRunFields scans a row into a Run using the canonical column order.
 func scanRunFields(s interface{ Scan(dest ...any) error }) (*domain.Run, error) {
@@ -91,6 +91,7 @@ func scanRunFields(s interface{ Scan(dest ...any) error }) (*domain.Run, error) 
 		&r.BackendRef, &backendState,
 		&r.CreatedAt, &r.UpdatedAt, &r.StartedAt, &r.FinishedAt, &r.ErrorSummary,
 		&wsKind, &wsClaim, &wsAccess, &wsPV, &owner, &authContext,
+		&r.DataDeletedAt,
 	)
 	if err != nil {
 		return nil, err
