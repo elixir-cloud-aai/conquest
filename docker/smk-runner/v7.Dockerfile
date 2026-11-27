@@ -9,7 +9,7 @@
 #     --platform linux/amd64 \
 #     -t registry.example.com/conquest/conquest-smk-7.32.4-runner:release-20260329 .
 
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS go-builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
