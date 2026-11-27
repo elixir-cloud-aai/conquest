@@ -249,7 +249,11 @@ func (h *Handler) ListRunTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout, deleted := h.runLogs(r.Context(), runID)
+	layout, deleted, err := h.runLogs(r.Context(), runID)
+	if err != nil {
+		handleGetError(w, err)
+		return
+	}
 	logs := make([]TaskLog, 0, len(result.Tasks))
 	for _, t := range result.Tasks {
 		logs = append(logs, taskLog(t, layout, deleted))
@@ -271,7 +275,11 @@ func (h *Handler) GetRunTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	layout, deleted := h.runLogs(r.Context(), runID)
+	layout, deleted, err := h.runLogs(r.Context(), runID)
+	if err != nil {
+		handleGetError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, taskLog(task, layout, deleted))
 }
 
@@ -361,13 +369,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // runLogs returns the layout of the run's objects, in the run's bucket,
 // and when the run's data was deleted (nil: it exists); the server's layout
-// and nil if the run can't be read.
-func (h *Handler) runLogs(ctx context.Context, runID string) (storage.Layout, *time.Time) {
+// and nil if there is no such run. Any other error is returned: the run's
+// data may be gone, so its log URIs can't be given.
+func (h *Handler) runLogs(ctx context.Context, runID string) (storage.Layout, *time.Time, error) {
 	run, err := h.ctrl.Run(ctx, runID)
-	if err != nil {
-		return h.ctrl.Layout(), nil
+	if errors.Is(err, pg.ErrNotFound) || (err == nil && run == nil) {
+		return h.ctrl.Layout(), nil, nil
 	}
-	return h.ctrl.LayoutOf(run), run.DataDeletedAt
+	if err != nil {
+		return storage.Layout{}, nil, err
+	}
+	return h.ctrl.LayoutOf(run), run.DataDeletedAt, nil
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

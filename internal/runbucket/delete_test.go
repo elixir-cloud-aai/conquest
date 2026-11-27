@@ -3,11 +3,13 @@ package runbucket
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -219,6 +221,45 @@ func TestOBC_ListRunBucketsListsThisInstancesClaims(t *testing.T) {
 	}
 	if len(got) != 2 || !ids[testRunID] || !ids[other] {
 		t.Fatalf("ListRunBuckets = %+v, want the claims of runs %s and %s", got, testRunID, other)
+	}
+}
+
+func TestOBC_ListRunBucketsReadsEveryPage(t *testing.T) {
+	f := newOBCFixture(t, OBCConfig{Instance: "conquest-workflows", ListPageSize: 1})
+	ids := []string{testRunID, "0193b6a2-7c1e-7f00-8000-000000000002", "0193b6a2-7c1e-7f00-8000-000000000003"}
+	tokens := map[string]int{"": 0, "page-1": 1, "page-2": 2}
+	var continues []string
+	f.dyn.PrependReactor("list", "objectbucketclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		opts := a.(k8stesting.ListActionImpl).ListOptions
+		continues = append(continues, opts.Continue)
+		if opts.Limit != 1 {
+			t.Errorf("limit = %d, want 1", opts.Limit)
+		}
+		page, ok := tokens[opts.Continue]
+		if !ok {
+			return true, nil, errors.New("unknown continue token")
+		}
+		obj := unstructured.Unstructured{Object: map[string]any{"apiVersion": "objectbucket.io/v1alpha1", "kind": "ObjectBucketClaim"}}
+		obj.SetName(OBCNamePrefix + ids[page])
+		obj.SetNamespace(testNamespace)
+		obj.SetLabels(map[string]string{RunIDLabel: ids[page], InstanceLabel: "conquest-workflows"})
+		list := &unstructured.UnstructuredList{Object: map[string]any{"apiVersion": "objectbucket.io/v1alpha1", "kind": "ObjectBucketClaimList"}}
+		list.Items = []unstructured.Unstructured{obj}
+		if page+1 < len(ids) {
+			list.SetContinue("page-" + string(rune('1'+page)))
+		}
+		return true, list, nil
+	})
+
+	got, err := f.p.ListRunBuckets(context.Background())
+	if err != nil {
+		t.Fatalf("ListRunBuckets: %v", err)
+	}
+	if len(got) != 3 || got[0].RunID != ids[0] || got[1].RunID != ids[1] || got[2].RunID != ids[2] {
+		t.Fatalf("ListRunBuckets = %+v, want the claims of runs %v", got, ids)
+	}
+	if want := []string{"", "page-1", "page-2"}; !slices.Equal(continues, want) {
+		t.Fatalf("continue tokens %q, want %q", continues, want)
 	}
 }
 

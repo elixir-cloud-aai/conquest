@@ -129,6 +129,7 @@ type data struct {
 	deleted  []string
 	fail     map[string]error
 	unplaced map[string]bool // runs whose data CheckRunData can't place
+	events   *[]string       // if set, gets "data <run>" in call order
 }
 
 func (d *data) CheckRunData(run *domain.Run) error {
@@ -147,6 +148,9 @@ func (d *data) DeleteRunData(_ context.Context, run *domain.Run) error {
 		return err
 	}
 	d.deleted = append(d.deleted, run.RunID)
+	if d.events != nil {
+		*d.events = append(*d.events, "data "+run.RunID)
+	}
 	return nil
 }
 
@@ -155,15 +159,22 @@ type cluster struct {
 	jobsDeleted []string
 	cleaned     []string
 	jobsErr     error
+	events      *[]string // if set, gets "jobs <run>" and "workspace <claim>" in call order
 }
 
 func (c *cluster) DeleteRunJobs(_ context.Context, runID string) error {
 	c.jobsDeleted = append(c.jobsDeleted, runID)
+	if c.events != nil {
+		*c.events = append(*c.events, "jobs "+runID)
+	}
 	return c.jobsErr
 }
 
 func (c *cluster) Cleanup(_ context.Context, w *domain.WorkspaceBinding) error {
 	c.cleaned = append(c.cleaned, w.ClaimName)
+	if c.events != nil {
+		*c.events = append(*c.events, "workspace "+w.ClaimName)
+	}
 	return nil
 }
 
@@ -295,14 +306,19 @@ func TestSweep_DeletesTheRemainingJobsAndWorkspaceFirst(t *testing.T) {
 	c := &clock{now: start}
 	pvc := finished("pvc", domain.StateComplete, start.Add(-800*time.Hour))
 	pvc.Workspace = &domain.WorkspaceBinding{Kind: domain.WorkspaceKindPVC, ClaimName: "ws-pvc"}
-	st := newStore(pvc, finished("emptydir", domain.StateComplete, start.Add(-800*time.Hour)))
-	k8s := &cluster{}
-	s := newSweeper(t, st, newLeases(c), &data{}, c, "a")
+	st := newStore(pvc, finished("emptydir", domain.StateComplete, start.Add(-801*time.Hour)))
+	var events []string
+	k8s := &cluster{events: &events}
+	s := newSweeper(t, st, newLeases(c), &data{events: &events}, c, "a")
 	s.SetJobs(k8s)
 	s.SetWorkspace(k8s)
 
 	if got := s.SweepOnce(context.Background()); got.Deleted != 2 {
 		t.Fatalf("SweepOnce = %+v", got)
+	}
+	// per run, oldest first: Jobs, then the workspace, then the data
+	if want := []string{"jobs emptydir", "data emptydir", "jobs pvc", "workspace ws-pvc", "data pvc"}; !slices.Equal(events, want) {
+		t.Errorf("calls %v, want %v", events, want)
 	}
 	sort.Strings(k8s.jobsDeleted)
 	if !slices.Equal(k8s.jobsDeleted, []string{"emptydir", "pvc"}) {

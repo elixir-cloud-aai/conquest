@@ -3,6 +3,7 @@ package wes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -42,6 +43,31 @@ func (expiredRuns) Get(_ context.Context, runID string) (*domain.Run, error) {
 
 func (expiredRuns) List(context.Context, repository.Page) (*repository.PageResult[*domain.Run], error) {
 	return &repository.PageResult[*domain.Run]{Items: []*domain.Run{expiredRun("a")}}, nil
+}
+
+// unreadableRuns read run states but not runs, as a database that fails
+// between two queries would.
+type unreadableRuns struct{ wesRunStoreStub }
+
+func (unreadableRuns) Get(context.Context, string) (*domain.Run, error) {
+	return nil, errors.New("database down")
+}
+
+// Task logs of a run that can't be read name no log URIs that may point to
+// deleted objects: the request fails instead.
+func TestTaskLogsFailWhenTheirRunCantBeRead(t *testing.T) {
+	ctrl := controller.NewRunController(&unreadableRuns{}, &tasksOfRun{}, &wesEventStoreStub{},
+		storage.Layout{Bucket: "conquest", Version: "v1"}, adapter.NewRegistry(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := chi.NewRouter()
+	NewHandler(ctrl).Routes(r)
+	for _, path := range []string{"/ga4gh/wes/v1/runs/a/tasks", "/ga4gh/wes/v1/runs/a/tasks/t1"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "s3://") {
+			t.Errorf("GET %s: %d %s, want 500 without log URIs", path, rec.Code, rec.Body)
+		}
+	}
 }
 
 // failingObjects fails the test if the server reads the deleted bucket.
