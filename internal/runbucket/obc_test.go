@@ -472,7 +472,7 @@ func TestParseOBCConfig(t *testing.T) {
 		"zero max objects":     {EnvOBCStorageClass: "sc", EnvOBCMaxObjects: "0"},
 		"bad bind timeout":     {EnvOBCStorageClass: "sc", EnvOBCBindTimeout: "soon"},
 		"zero bind timeout":    {EnvOBCStorageClass: "sc", EnvOBCBindTimeout: "0s"},
-		"too long bind timout": {EnvOBCStorageClass: "sc", EnvOBCBindTimeout: "26s"},
+		"too long bind timout": {EnvOBCStorageClass: "sc", EnvOBCBindTimeout: "21s"},
 	} {
 		if got, err := ParseOBCConfig(env(m)); err == nil {
 			t.Errorf("%s: ParseOBCConfig = %+v, want an error", name, got)

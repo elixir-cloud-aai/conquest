@@ -41,8 +41,9 @@ const (
 const DefaultOBCBindTimeout = 20 * time.Second
 
 // MaxOBCBindTimeout bounds EnvOBCBindTimeout: the WES request that submits
-// the run waits for the binding, and the server answers it within 30s.
-const MaxOBCBindTimeout = 25 * time.Second
+// the run waits for the binding, ends within 25s and leaves Reserve (5s)
+// of that to store the run, so a longer wait could never be used.
+const MaxOBCBindTimeout = 20 * time.Second
 
 // RunIDLabel labels each claim with its run's ID. Conquest adopts and
 // deletes only claims that carry its run's ID.
@@ -360,10 +361,10 @@ func (p *OBC) Delete(ctx context.Context, runID string) error {
 	if err != nil {
 		return fmt.Errorf("obc run buckets: get claim %s: %w", name, err)
 	}
-	// a claim already being deleted is deleted again (no-op)
 	if err := labelledFor(obj, runID); err != nil {
 		return err
 	}
+	// a claim already being deleted is deleted again (a no-op)
 	uid := obj.GetUID()
 	propagation := metav1.DeletePropagationBackground
 	opts := metav1.DeleteOptions{PropagationPolicy: &propagation}

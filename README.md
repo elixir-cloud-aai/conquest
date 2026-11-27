@@ -238,8 +238,9 @@ the Conquest ServiceAccount's rights to create and delete Jobs and PVCs.
 the upstream Pod Security Admission checks.
 
 Runner and task pods also run as a ServiceAccount of their own,
-`CONQUEST_SERVICE_ACCOUNT` (default `conquest`, the name the chart gives
-the server's own account: set it outside the chart). The chart creates one,
+`CONQUEST_SERVICE_ACCOUNT` (default `conquest`, which is also the server
+account's name in the chart's default values, so always set it; the chart
+does). The chart creates one,
 `<conquest.appname>-pods` (`conquest.podServiceAccount`), with no Role bound
 and `automountServiceAccountToken: false`, and sets the variable to it, so
 a token injected for the pods' account (e.g. by a mutating webhook keyed on
@@ -362,7 +363,7 @@ The bucket provisioner creates the bucket, an object store user that may
 reach only that bucket, and a Secret (`AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`) and a ConfigMap (`BUCKET_NAME`, …) named after the
 claim. The run submission waits until the claim is `Bound`, at most
-`CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` (default `20s`, at most `25s`),
+`CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` (default and at most `20s`),
 then takes the bucket's name from the ConfigMap and checks that the Secret
 holds both keys. The WES request waits for this: every run submission
 (`POST /ga4gh/wes/v1/runs`, body upload included) must end within 25 s,
@@ -953,7 +954,7 @@ No config files.
 | `CONQUEST_RUN_BUCKETS_OBC_STORAGE_CLASS` | —               | StorageClass of the run buckets' claims (required with `obc`) |
 | `CONQUEST_RUN_BUCKETS_OBC_MAX_SIZE` | —                    | Size quota of each run bucket, e.g. `10Gi` (`obc`) |
 | `CONQUEST_RUN_BUCKETS_OBC_MAX_OBJECTS` | —                 | Object quota of each run bucket (`obc`) |
-| `CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` | `20s`            | Wait for a run's claim to be Bound, at most `25s` (`obc`) |
+| `CONQUEST_RUN_BUCKETS_OBC_BIND_TIMEOUT` | `20s`            | Wait for a run's claim to be Bound, at most `20s` (`obc`) |
 | `CONQUEST_SERVICE_ACCOUNT`          | `conquest`           | ServiceAccount of runner and task pods; never the server's, so override the default (the chart does; see Pod Security) |
 | `CONQUEST_STORAGE_GATEWAY_SECRET`   | —                    | Signs storage gateway URLs (>= 32 bytes) |
 | `CONQUEST_RUNNER_SECRET`            | —                    | Derives runner tokens (>= 32 bytes; see Runner callbacks) |
@@ -1084,11 +1085,14 @@ instead of the server's account (the default values set
 their pods' account. Grants the cluster ties to a ServiceAccount don't
 move along: if the server's account was granted something for the pods
 (e.g. an OpenShift SecurityContextConstraints with `oc adm policy
-add-scc-to-user <scc> -z <account>`, or a NetworkPolicy or admission
-rule keyed on it), grant the same to `<conquest.appname>-pods` before the
+add-scc-to-user <scc> -z <account>`, or a CNI policy (e.g. Calico,
+Cilium) or admission rule keyed on it), grant the same to `<conquest.appname>-pods` before the
 upgrade, or new runner and task pods may be refused. If your values set
 `conquest.env.CONQUEST_SERVICE_ACCOUNT` to the server's account, remove it:
 `obc` refuses to start with it, `shared` warns.
+In every mode, a WES run submission now ends within 25 s of the handler's
+start, and a submission whose client disconnected or whose time ran out
+before the run was stored stores no run (see obc).
 
 CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository

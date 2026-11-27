@@ -252,9 +252,8 @@ storageIsolation:
     # where the provisioner supports them. Empty: none.
     maxSize: ""        # a quantity, e.g. 10Gi
     maxObjects: ""     # e.g. 100000
-    # How long a run submission waits for its claim to be Bound (at most
-    # 25s; the WES request waits for it and ends within 25s, so the wait
-    # also stops 5s before that). Empty: 20s.
+    # How long a run submission waits for its claim to be Bound, at most
+    # 20s (the WES request waits for it). Empty: 20s.
     bindTimeout: ""
 
 # Runner callback authentication: each runner pod gets its run's runner

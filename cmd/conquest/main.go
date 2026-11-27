@@ -443,9 +443,9 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{
 		Addr:         cfg.HTTPAddr,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
+		ReadTimeout:  serverReadTimeout,
 		WriteTimeout: serverWriteTimeout,
-		IdleTimeout:  60 * time.Second,
+		IdleTimeout:  serverIdleTimeout,
 	}
 
 	// Start server in a goroutine.

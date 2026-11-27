@@ -247,11 +247,17 @@ func (c *RunController) SubmitRun(ctx context.Context, req *RunRequest) (*domain
 	run.RunRootURI = layout.RunRootURI(run.RunID)
 	run.ResolvedWorkflowRef = prepared.ResolvedWorkflowRef
 
-	// Making the bucket may take seconds (obc): if the request ended
-	// meanwhile, its client never learns the run ID, so store no run.
+	// In any mode: if the request ended (client gone, or its time ran out,
+	// e.g. while an obc bucket was made), its client never learns the run
+	// ID, so store no run.
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("submit run: %w", err)
 	}
+	// From here on, finish what storing the run starts, even if the request
+	// ends meanwhile: a stored run without its runner Job or error state
+	// would stay QUEUED for good.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runSubmitFinishTimeout)
+	defer cancel()
 	keepBucket = true
 	if err := c.runs.Create(ctx, run); err != nil {
 		if layout.Bucket != c.layout.Bucket {
@@ -350,6 +356,10 @@ func (c *RunController) deleteRunBucket(runID string) {
 		c.log.Error("failed to delete the bucket of a run that was not created", "run_id", runID, "err", err)
 	}
 }
+
+// runSubmitFinishTimeout bounds what SubmitRun does once it stores the run
+// (store, runner Job, state), independent of the request.
+const runSubmitFinishTimeout = 30 * time.Second
 
 // runBucketCleanupTimeout bounds deleteRunBucket.
 const runBucketCleanupTimeout = 30 * time.Second

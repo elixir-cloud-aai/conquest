@@ -9,21 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/anuragxxd/conquest/internal/config"
 	"github.com/anuragxxd/conquest/internal/runbucket"
 )
-
-// serverWriteTimeout bounds how long the server takes to answer a request,
-// counted from its headers.
-const serverWriteTimeout = 30 * time.Second
-
-// submitTimeout bounds a WES run submission, body upload included, so that
-// its answer (the run ID) is written before serverWriteTimeout. An obc run
-// bucket stops waiting for its claim runbucket.DefaultOBCReserve before
-// it, leaving that to store the run and create its runner Job.
-const submitTimeout = serverWriteTimeout - 5*time.Second
 
 // enforcePodServiceAccount checks the pods' ServiceAccount against the
 // server's (named by its token in tokenFile): a problem stops the server

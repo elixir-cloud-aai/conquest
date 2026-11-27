@@ -146,6 +146,28 @@ func TestSubmitRun_StoresNoRunAfterTheRequestEnded(t *testing.T) {
 	}
 }
 
+// Once the run is stored, the end of its request (the client gone, or the
+// submit deadline) must not leave it half-submitted: the runner Job is
+// still created.
+func TestSubmitRun_FinishesAStoredRunAfterTheRequestEnded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runs := &runStoreStub{onCreate: cancel}
+	runAdapter := &runAdapterStub{prepared: preparedNextflowRun()}
+	runBackend := &runBackendStub{submission: &backend.RunSubmission{BackendRef: "runner-job-1"}}
+
+	run, err := runBucketsController(runs, runAdapter, runBackend, &runBucketsStub{}).SubmitRun(ctx, nextflowRequest)
+	if err != nil {
+		t.Fatalf("SubmitRun: %v", err)
+	}
+	if runBackend.spec == nil || runBackend.submitCtxErr != nil {
+		t.Fatalf("runner submitted: %v, with context error %v; want it submitted on a live context", runBackend.spec != nil, runBackend.submitCtxErr)
+	}
+	if run.BackendRef != "runner-job-1" || run.State == domain.StateSystemError {
+		t.Fatalf("run = %+v, want it submitted", run)
+	}
+}
+
 // An invalid request fails before the run gets a bucket.
 func TestSubmitRun_InvalidRequestGetsNoBucket(t *testing.T) {
 	buckets := &runBucketsStub{}

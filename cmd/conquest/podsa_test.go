@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/anuragxxd/conquest/internal/config"
 	"github.com/anuragxxd/conquest/internal/runbucket"
@@ -20,33 +19,24 @@ func TestEnforcePodServiceAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	missing := filepath.Join(t.TempDir(), "missing")
 	for _, tc := range []struct {
 		mode    runbucket.Mode
 		podSA   string
+		token   string
 		wantErr bool
 	}{
-		{runbucket.ModeOBC, "conquest-pods", false},
-		{runbucket.ModeOBC, "conquest", true},
-		{runbucket.ModeShared, "conquest-pods", false},
-		{runbucket.ModeShared, "conquest", false}, // warns only
+		{runbucket.ModeOBC, "conquest-pods", tokenFile, false},
+		{runbucket.ModeOBC, "conquest", tokenFile, true},
+		{runbucket.ModeOBC, "conquest-pods", missing, true}, // can't tell
+		{runbucket.ModeShared, "conquest-pods", tokenFile, false},
+		{runbucket.ModeShared, "conquest", tokenFile, false}, // warns only
+		{runbucket.ModeShared, "conquest-pods", missing, false},
 	} {
 		cfg := &config.Config{RunBuckets: tc.mode, K8sNamespace: "conquest", ServiceAccount: tc.podSA}
-		if err := enforcePodServiceAccount(cfg, tokenFile, log); (err != nil) != tc.wantErr {
-			t.Errorf("%s with pods as %s: err = %v, wantErr %v", tc.mode, tc.podSA, err, tc.wantErr)
+		if err := enforcePodServiceAccount(cfg, tc.token, log); (err != nil) != tc.wantErr {
+			t.Errorf("%s with pods as %s, token %s: err = %v, wantErr %v", tc.mode, tc.podSA, tc.token, err, tc.wantErr)
 		}
-	}
-}
-
-// A run submission waits for its claim within the server's answer.
-func TestSubmitTimeoutFitsTheWriteTimeout(t *testing.T) {
-	if submitTimeout >= serverWriteTimeout {
-		t.Fatalf("submitTimeout %s must stay below the server's write timeout %s", submitTimeout, serverWriteTimeout)
-	}
-	if submitTimeout-runbucket.DefaultOBCReserve < 10*time.Second {
-		t.Fatalf("submitTimeout %s leaves an obc claim less than 10s to bind", submitTimeout)
-	}
-	if runbucket.MaxOBCBindTimeout > submitTimeout {
-		t.Fatalf("MaxOBCBindTimeout %s above submitTimeout %s", runbucket.MaxOBCBindTimeout, submitTimeout)
 	}
 }
 
