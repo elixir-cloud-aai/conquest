@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anuragxxd/conquest/internal/adapter"
 	"github.com/anuragxxd/conquest/internal/backend"
@@ -24,6 +25,8 @@ type runBucketsStub struct {
 	deleted   []string
 	// onEnsure, if set, runs in Ensure (e.g. to use up the request's time).
 	onEnsure func()
+	// deleteErrs are returned by the first Delete calls, in order.
+	deleteErrs []error
 }
 
 func (s *runBucketsStub) Ensure(_ context.Context, runID string) (runbucket.Bucket, error) {
@@ -43,6 +46,11 @@ func (s *runBucketsStub) Credentials(context.Context, string) (runbucket.Credent
 
 func (s *runBucketsStub) Delete(_ context.Context, runID string) error {
 	s.deleted = append(s.deleted, runID)
+	if len(s.deleteErrs) > 0 {
+		err := s.deleteErrs[0]
+		s.deleteErrs = s.deleteErrs[1:]
+		return err
+	}
 	return nil
 }
 
@@ -165,6 +173,38 @@ func TestSubmitRun_FinishesAStoredRunAfterTheRequestEnded(t *testing.T) {
 	}
 	if run.BackendRef != "runner-job-1" || run.State == domain.StateSystemError {
 		t.Fatalf("run = %+v, want it submitted", run)
+	}
+}
+
+// A runner submission that uses up the time to finish the run still gets
+// the run's error state stored.
+func TestSubmitRun_StoresTheErrorAfterTheFinishTimeout(t *testing.T) {
+	old := runSubmitFinishTimeout
+	runSubmitFinishTimeout = 5 * time.Millisecond
+	defer func() { runSubmitFinishTimeout = old }()
+	runs := &runStoreStub{}
+	runAdapter := &runAdapterStub{prepared: preparedNextflowRun()}
+	runBackend := &runBackendStub{err: errors.New("API too slow"), onSubmit: func() { time.Sleep(20 * time.Millisecond) }}
+
+	run, err := runBucketsController(runs, runAdapter, runBackend, &runBucketsStub{}).SubmitRun(context.Background(), nextflowRequest)
+	if err != nil {
+		t.Fatalf("SubmitRun: %v", err)
+	}
+	if run.State != domain.StateSystemError || !strings.Contains(runs.errorSummary, "API too slow") {
+		t.Fatalf("state %s, stored error %q; want SYSTEM_ERROR stored", run.State, runs.errorSummary)
+	}
+}
+
+// A failed cleanup of a run that wasn't stored is retried: nothing else
+// would find the bucket later.
+func TestSubmitRun_RetriesTheCleanupOfAnUnstoredRunsBucket(t *testing.T) {
+	buckets := &runBucketsStub{ensureErr: errors.New("no bucket"), deleteErrs: []error{errors.New("API hiccup")}}
+	runAdapter := &runAdapterStub{prepared: preparedNextflowRun()}
+	if _, err := runBucketsController(&runStoreStub{}, runAdapter, &runBackendStub{}, buckets).SubmitRun(context.Background(), nextflowRequest); err == nil {
+		t.Fatal("expected an error")
+	}
+	if len(buckets.deleted) != 2 {
+		t.Fatalf("delete attempts %v, want a retry after the failure", buckets.deleted)
 	}
 }
 

@@ -202,13 +202,8 @@ func (p *OBC) Ensure(ctx context.Context, runID string) (Bucket, error) {
 	if err != nil {
 		return Bucket{}, err
 	}
-	bindTimeout := p.cfg.BindTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		left := time.Until(deadline) - p.cfg.Reserve
-		if left <= 0 {
-			return Bucket{}, fmt.Errorf("obc run buckets: too little time left in the request for claim %s", name)
-		}
-		bindTimeout = min(bindTimeout, left)
+	if _, err := p.bindBudget(ctx, name); err != nil {
+		return Bucket{}, err
 	}
 	if _, err := p.claims().Create(ctx, p.newClaim(name, runID), metav1.CreateOptions{}); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -222,6 +217,11 @@ func (p *OBC) Ensure(ctx context.Context, runID string) (Bucket, error) {
 		if err := ownClaim(existing, runID); err != nil {
 			return Bucket{}, err
 		}
+	}
+	// creating the claim took time too
+	bindTimeout, err := p.bindBudget(ctx, name)
+	if err != nil {
+		return Bucket{}, err
 	}
 	if err := p.waitBound(ctx, name, runID, bindTimeout); err != nil {
 		return Bucket{}, err
@@ -291,6 +291,20 @@ func labelledFor(obj *unstructured.Unstructured, runID string) error {
 		return fmt.Errorf("obc run buckets: claim %s is not labelled %s=%s", obj.GetName(), RunIDLabel, runID)
 	}
 	return nil
+}
+
+// bindBudget returns how long Ensure may still wait for the claim: the bind
+// timeout, but no later than Reserve before ctx's deadline.
+func (p *OBC) bindBudget(ctx context.Context, name string) (time.Duration, error) {
+	budget := p.cfg.BindTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		left := time.Until(deadline) - p.cfg.Reserve
+		if left <= 0 {
+			return 0, fmt.Errorf("obc run buckets: too little time left in the request for claim %s", name)
+		}
+		budget = min(budget, left)
+	}
+	return budget, nil
 }
 
 // waitBound waits until the claim is Bound, for at most timeout.

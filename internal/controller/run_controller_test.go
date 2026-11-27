@@ -165,10 +165,15 @@ type runBackendStub struct {
 	cancelCalled bool
 	// submitCtxErr is the context's error when SubmitRun was called.
 	submitCtxErr error
+	// onSubmit, if set, runs in SubmitRun (e.g. to use up its time).
+	onSubmit func()
 }
 
 func (s *runBackendStub) SubmitRun(ctx context.Context, _ *domain.Run, spec *backend.RunnerSpec) (*backend.RunSubmission, error) {
 	s.spec = spec
+	if s.onSubmit != nil {
+		s.onSubmit()
+	}
 	s.submitCtxErr = ctx.Err()
 	return s.submission, s.err
 }
@@ -232,7 +237,10 @@ func (s *runStoreStub) UpdateState(_ context.Context, _ string, from, to domain.
 	return nil
 }
 
-func (s *runStoreStub) SetError(_ context.Context, _ string, _ domain.State, summary string) error {
+func (s *runStoreStub) SetError(ctx context.Context, _ string, _ domain.State, summary string) error {
+	if err := ctx.Err(); err != nil {
+		return err // as the PostgreSQL store does
+	}
 	s.errorSummary = summary
 	return nil
 }

@@ -129,10 +129,11 @@ spec:
             - name: CONQUEST_K8S_NAMESPACE
               value: {{ .Release.Namespace | quote }}
             {{- end }}
-            {{- if not .Values.conquest.env.CONQUEST_SERVICE_ACCOUNT }}
-            {{- if eq (include "conquest.podServiceAccountName" .) (include "conquest.serviceAccountName" .) }}
-            {{- fail "conquest.podServiceAccount: runner and task pods need a ServiceAccount other than the server's (conquest.serviceAccount)" }}
+            {{- $podSA := .Values.conquest.env.CONQUEST_SERVICE_ACCOUNT | default (include "conquest.podServiceAccountName" .) | toString | trim }}
+            {{- if eq $podSA (include "conquest.serviceAccountName" .) }}
+            {{- fail "conquest.podServiceAccount (or conquest.env.CONQUEST_SERVICE_ACCOUNT): runner and task pods need a ServiceAccount other than the server's (conquest.serviceAccount)" }}
             {{- end }}
+            {{- if not .Values.conquest.env.CONQUEST_SERVICE_ACCOUNT }}
             # Runner and task pods run as their own ServiceAccount, never the
             # server's.
             - name: CONQUEST_SERVICE_ACCOUNT

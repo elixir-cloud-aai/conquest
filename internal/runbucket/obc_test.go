@@ -225,7 +225,7 @@ func TestOBC_EnsureTimesOutWithoutBinding(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Bound") {
 		t.Fatalf("Ensure = %v, want a timeout waiting for Bound", err)
 	}
-	if d := time.Since(start); d > time.Second {
+	if d := time.Since(start); d < 40*time.Millisecond || d > time.Second {
 		t.Fatalf("Ensure took %v with a 50ms bind timeout", d)
 	}
 }

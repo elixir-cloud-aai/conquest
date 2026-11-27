@@ -202,11 +202,17 @@ func TestChart_PodServiceAccountSettings(t *testing.T) {
 		t.Errorf("CONQUEST_SERVICE_ACCOUNT = %q, want custom", env["CONQUEST_SERVICE_ACCOUNT"])
 	}
 
-	// an upgrade with the old default kept in the values renders it; the
-	// server then refuses obc and warns with shared (cmd/conquest)
-	objs = mustRender(t, "conquest.env.CONQUEST_SERVICE_ACCOUNT=conquest")
-	if got := serverEnv(t, objs)["CONQUEST_SERVICE_ACCOUNT"]; got != "conquest" {
-		t.Errorf("CONQUEST_SERVICE_ACCOUNT = %q, want conquest", got)
+	// an upgrade with the old default (the server's account) kept in the
+	// values fails to render, whatever the run bucket mode
+	for _, sets := range [][]string{
+		{"conquest.env.CONQUEST_SERVICE_ACCOUNT=conquest"},
+		{"conquest.env.CONQUEST_SERVICE_ACCOUNT= conquest "},
+		{"conquest.env.CONQUEST_SERVICE_ACCOUNT=conquest", "storageIsolation.enabled=true",
+			"storageIsolation.runBuckets=obc", "storageIsolation.obc.storageClassName=sc"},
+	} {
+		if _, err := render(t, sets...); err == nil || !strings.Contains(err.Error(), "CONQUEST_SERVICE_ACCOUNT") {
+			t.Errorf("%v: render = %v, want an error", sets, err)
+		}
 	}
 
 	// no account created and none named: the namespace's default

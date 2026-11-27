@@ -1034,7 +1034,8 @@ authenticated.
 - **Pods' ServiceAccount** (see Pod Security): the chart creates
   `<conquest.appname>-pods` (default `conquest-pods`), without Role and
   token, and runs runner and task pods as it (`conquest.podServiceAccount`;
-  `conquest.env.CONQUEST_SERVICE_ACCOUNT` overrides it).
+  `conquest.env.CONQUEST_SERVICE_ACCOUNT` overrides it). Rendering fails
+  if the pods' account would be the server's.
 - **Browser front ends and registries**: `cors.allowedOrigins` (exact
   origins, see CORS) and `serviceInfo.*` (see Service info) are empty by
   default.
@@ -1088,8 +1089,10 @@ move along: if the server's account was granted something for the pods
 add-scc-to-user <scc> -z <account>`, or a CNI policy (e.g. Calico,
 Cilium) or admission rule keyed on it), grant the same to `<conquest.appname>-pods` before the
 upgrade, or new runner and task pods may be refused. If your values set
-`conquest.env.CONQUEST_SERVICE_ACCOUNT` to the server's account, remove it:
-`obc` refuses to start with it, `shared` warns.
+`conquest.env.CONQUEST_SERVICE_ACCOUNT` to the server's account (as the
+old default values did, `conquest`), remove it: the chart refuses to
+render with it. Outside the chart, the server refuses to start with it
+with `obc` and warns with `shared`.
 In every mode, a WES run submission now ends within 25 s of the handler's
 start, and a submission whose client disconnected or whose time ran out
 before the run was stored stores no run (see obc).
