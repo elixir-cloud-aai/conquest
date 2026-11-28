@@ -64,9 +64,11 @@ env:
   PLATFORMS: linux/amd64
   NXF_PLUGINS_ALLOWED: nf-ga4gh,nf-amazon,nf-schema,nf-core-utils,nf-fgbio,nf-prov
   # Trivy fails the scan on fixable critical and high findings when this is
-  # "true", so no image with such a finding is published. A matrix entry can
-  # override it with scan_fail: "false" (its findings still go to code
-  # scanning, and a full report to each scan job's artifacts).
+  # "true". publish needs every scan, so then no image is published while
+  # any of them has such a finding. A matrix entry can opt out with
+  # scan_fail: "false" (quoted: a YAML boolean false would not opt out);
+  # its findings still go to code scanning, and a full report to the scan
+  # job's artifacts.
   SCAN_FAIL: "true"
 
 jobs:
@@ -106,7 +108,8 @@ jobs:
           # scan_fail "false": the Nextflow framework jar and the nf-amazon
           # plugin bundle Java libraries with fixable findings (Jackson,
           # Guava, jsoup, pf4j, Netty) that no Nextflow release fixes
-          # entirely yet (elixir-cloud-aai/generic-issues#144)
+          # entirely yet (elixir-cloud-aai/generic-issues#144). Drop the
+          # opt-out once a release or plugin upgrade clears them.
           - name: conquest-nf-24.10.4-runner
             file: docker/nf-runner/Dockerfile
             nxf_version: "24.10.4"
@@ -159,6 +162,13 @@ jobs:
 
       # Pull requests load the image into the local Docker engine; pushes
       # push it by digest only (untagged), with SBOM and provenance
+      # A date for SECURITY_REFRESH: the Debian and conda security updates
+      # in the Dockerfiles are rebuilt at least daily, not kept from cache
+      - &refresh
+        name: Set security refresh date
+        id: refresh
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "${GITHUB_OUTPUT}"
+
       - &build-image
         name: Build image
         id: build
@@ -170,6 +180,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           build-args: |
             ${{ matrix.build_args }}
+            SECURITY_REFRESH=${{ steps.refresh.outputs.date }}
             ${{ matrix.nxf_version && 'NXF_BASE_IMAGE=nf-runtime' || '' }}
             ${{ matrix.nxf_version && format('NXF_PLUGINS_ALLOWED={0}', env.NXF_PLUGINS_ALLOWED) || '' }}
           build-contexts: ${{ matrix.nxf_version && format('nf-runtime=oci-layout://{0}/nf-runtime@{1}', runner.temp, steps.nf-runtime.outputs.digest) || '' }}
@@ -222,6 +233,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - *setup-buildx
       - *nf-runtime
+      - *refresh
       - *build-image
       # All jobs of a matrix share one set of outputs, so the digest goes on
       # as an artifact

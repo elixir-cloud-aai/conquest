@@ -40,10 +40,14 @@ ENV NXF_HOME=/.nextflow
 # and its framework jar (from www.nextflow.io/releases, where the launcher
 # itself would fetch it), each checked against its SHA-256; then
 # `nextflow -version` sets the launcher up, as the installer's -download
-# did. Checksums per release: the launcher's is the digest GitHub shows for
-# the release asset `nextflow` (computed for 24.10.4, whose assets have
-# none); each jar matches the classes of the release's `nextflow-<ver>-dist`
-# asset. Adding a Nextflow version: add both checksums here.
+# did.
+#
+# Adding a Nextflow version (also add it to the Makefile, images.yaml and
+# ghcr.yaml): download both files from the URLs below and run sha256sum
+# on them. Cross-check the launcher's checksum against the digest GitHub
+# shows for the release asset `nextflow` (releases before 25.x show none),
+# and the jar against the release's `nextflow-<ver>-dist` asset, which
+# embeds the same classes.
 RUN set -eux; \
     case "${NXF_VER}" in \
         24.10.4) \
@@ -70,6 +74,10 @@ RUN set -eux; \
         "https://www.nextflow.io/releases/v${NXF_VER}/nextflow-${NXF_VER}-one.jar"; \
     echo "${jar_sha256}  ${jar}" | sha256sum -c -; \
     nextflow -version; \
+    # The launcher found the verified jar: it downloaded no other one
+    set -- "${NXF_HOME}"/framework/*/*.jar; \
+    test "$#" -eq 1 && test "$1" = "${jar}"; \
+    echo "${jar_sha256}  ${jar}" | sha256sum -c -; \
     chown -R 1000:1000 "${NXF_HOME}"
 
 # Install as uid 1000 so the plugin cache is owned by the user the runner runs

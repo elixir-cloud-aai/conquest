@@ -31,7 +31,9 @@ ARG SNAKEMAKE_VERSION=7.32.4
 ARG MINIFORGE_VERSION=26.3.2-3
 
 # apt-get upgrade: the Debian security fixes the python base image doesn't
-# have yet
+# have yet. SECURITY_REFRESH (ghcr.yaml passes the date) invalidates the
+# build cache from here on, so a cached layer doesn't keep old packages.
+ARG SECURITY_REFRESH=
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
@@ -43,7 +45,8 @@ RUN apt-get update \
 # actual build platform instead of hardcoding x86_64 -- that made arm64 builds
 # download the amd64 installer and fail.
 # Packages with fixed vulnerabilities in the pinned Miniforge's base
-# environment are raised to their fixed versions, as in Dockerfile.
+# environment are raised to their fixed versions, as in Dockerfile (keep
+# the floors in step).
 RUN set -eux; \
     case "$(uname -m)" in \
         x86_64)  MINIFORGE_ARCH=x86_64 ;; \
@@ -73,6 +76,11 @@ RUN /usr/local/bin/python -m pip install --no-cache-dir --upgrade pip \
        "numpy<2" \
        "pandas>=1.5,<2" \
        "pulp>=2.7,<2.8"
+
+# setuptools 80.9+ turns the pkg_resources deprecation warning, which
+# min_version() of SM7 triggers, from a hidden DeprecationWarning into a
+# UserWarning: keep it hidden, as with the base image's setuptools.
+ENV PYTHONWARNINGS="ignore:pkg_resources is deprecated as an API:UserWarning"
 
 # No executor plugin for SM7 — tasks run locally via --cores N.
 

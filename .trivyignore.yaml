@@ -10,4 +10,5 @@ vulnerabilities:
     purls:
       - pkg:pypi/setuptools@70.3.0
     statement: pip vendors only pkg_resources of setuptools 70.3.0, not the vulnerable package_index
+    # At expiry, recheck the setuptools version in pip's vendor.txt
     expired_at: 2027-01-31

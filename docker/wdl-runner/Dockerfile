@@ -15,7 +15,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 FROM python:3.12-slim
 
 # apt-get upgrade: the Debian security fixes the python base image doesn't
-# have yet
+# have yet. SECURITY_REFRESH (ghcr.yaml passes the date) invalidates the
+# build cache from here on, so a cached layer doesn't keep old packages.
+ARG SECURITY_REFRESH=
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends bash ca-certificates curl git \

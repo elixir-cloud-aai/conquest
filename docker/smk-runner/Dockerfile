@@ -21,7 +21,9 @@ ARG SNAKEMAKE_VERSION=9.17.3
 ARG MINIFORGE_VERSION=26.3.2-3
 
 # apt-get upgrade: the Debian security fixes the python base image doesn't
-# have yet
+# have yet. SECURITY_REFRESH (ghcr.yaml passes the date) invalidates the
+# build cache from here on, so a cached layer doesn't keep old packages.
+ARG SECURITY_REFRESH=
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends bash bzip2 ca-certificates curl git \
@@ -33,7 +35,8 @@ RUN apt-get update \
 # The pinned Miniforge's base environment carries packages with fixed
 # vulnerabilities: raise them to their fixed versions (security floors; keep
 # them when bumping MINIFORGE_VERSION until its release ships newer ones),
-# then drop the replaced packages from the package cache.
+# then drop the replaced packages from the package cache. Keep the floors in
+# step with v7.Dockerfile.
 RUN set -eux; \
     case "$(uname -m)" in \
         x86_64)  MINIFORGE_ARCH=x86_64 ;; \

@@ -161,7 +161,7 @@ conquest:
   migration:
     image:
       repository: migrate/migrate
-      tag: v4.20.1
+      tag: v4.17.0
     command:
       - "-path"
       - "/migrations"
