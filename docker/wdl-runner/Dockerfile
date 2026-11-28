@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS go-builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS go-builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -14,7 +14,13 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 
 FROM python:3.12-slim
 
+# apt-get upgrade: the Debian security fixes the python base image doesn't
+# have yet. SECURITY_REFRESH (ghcr.yaml passes the build's date and attempt)
+# invalidates the build cache from here on, so a build on a new day or a
+# re-run doesn't reuse layers with old packages.
+ARG SECURITY_REFRESH=
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends bash ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 
