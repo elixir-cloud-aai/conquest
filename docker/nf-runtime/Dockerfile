@@ -21,7 +21,7 @@
 ARG CORRETTO_TAG=21
 FROM amazoncorretto:${CORRETTO_TAG}
 
-# Nextflow release to pin. The get.nextflow.io installer honours NXF_VER.
+# Nextflow release to pin: one with checksums in the install step below.
 ARG NXF_VER=24.10.4
 
 # Plugins baked in so runner pods do not resolve them over the network at
@@ -35,11 +35,42 @@ RUN useradd -u 1000 -m conquest
 
 ENV NXF_HOME=/.nextflow
 
-RUN curl -fsSL get.nextflow.io | bash \
-    && mv nextflow /usr/local/bin/nextflow \
-    && chmod 755 /usr/local/bin/nextflow \
-    && mkdir -p /.nextflow \
-    && chown -R 1000:1000 /.nextflow
+# Installs what `curl get.nextflow.io | bash` installed, without running an
+# unpinned script: the release's launcher script (from its GitHub release)
+# and its framework jar (from www.nextflow.io/releases, where the launcher
+# itself would fetch it), each checked against its SHA-256; then
+# `nextflow -version` sets the launcher up, as the installer's -download
+# did. Checksums per release: the launcher's is the digest GitHub shows for
+# the release asset `nextflow` (computed for 24.10.4, whose assets have
+# none); each jar matches the classes of the release's `nextflow-<ver>-dist`
+# asset. Adding a Nextflow version: add both checksums here.
+RUN set -eux; \
+    case "${NXF_VER}" in \
+        24.10.4) \
+            launcher_sha256=f69085f647f6c0a98c48ba5e905b10a55e04d32cfadfab2db18ae98601416c26; \
+            jar_sha256=c36f5777683986740104c8198cb514d7489695fd696cbaf6ddced25607a50c5e ;; \
+        25.04.3) \
+            launcher_sha256=f33571f9298e930993aa4afcde84bc0d0815a59ee7168d8a153093ad08e9b263; \
+            jar_sha256=9bcb80d83f53cce0c95c4d9dd82443c7f23a5ab6be5fceb72c0f8633243f187a ;; \
+        25.10.2) \
+            launcher_sha256=60aff30ad532030657296ca1fa72e37befda236bfd4fc7358a3cabf5e7589dd7; \
+            jar_sha256=0057035603c5fc18f42dc4bfbfcb7fc957d307c4111a9a7f2896d85d78340835 ;; \
+        25.10.4) \
+            launcher_sha256=968af86ff461c8c78a0704d46a0f0af0be52adf1dd15298b16f50a5463385456; \
+            jar_sha256=9897f09ee7116bdf3c6beb202210380e2daead237af07078e8b0bf97c29b7a66 ;; \
+        *) echo "no checksums for Nextflow ${NXF_VER}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/nextflow \
+        "https://github.com/nextflow-io/nextflow/releases/download/v${NXF_VER}/nextflow"; \
+    echo "${launcher_sha256}  /usr/local/bin/nextflow" | sha256sum -c -; \
+    chmod 755 /usr/local/bin/nextflow; \
+    jar="${NXF_HOME}/framework/${NXF_VER}/nextflow-${NXF_VER}-one.jar"; \
+    mkdir -p "$(dirname "${jar}")"; \
+    curl -fsSL -o "${jar}" \
+        "https://www.nextflow.io/releases/v${NXF_VER}/nextflow-${NXF_VER}-one.jar"; \
+    echo "${jar_sha256}  ${jar}" | sha256sum -c -; \
+    nextflow -version; \
+    chown -R 1000:1000 "${NXF_HOME}"
 
 # Install as uid 1000 so the plugin cache is owned by the user the runner runs
 # as; nextflow will not re-resolve them at runtime.
