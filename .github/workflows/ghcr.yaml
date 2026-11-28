@@ -63,11 +63,11 @@ env:
   # here when needed (the Nextflow bases then build under QEMU, much slower).
   PLATFORMS: linux/amd64
   NXF_PLUGINS_ALLOWED: nf-ga4gh,nf-amazon,nf-schema,nf-core-utils,nf-fgbio,nf-prov
-  # Trivy fails the scan on fixable critical and high findings only when this
-  # is "true". The images inherit fixable findings from their bases and Go
-  # dependencies; until those are fixed, the findings go to code scanning (and
-  # a full report to each scan job's artifacts) without blocking publication.
-  SCAN_FAIL: "false"
+  # Trivy fails the scan on fixable critical and high findings when this is
+  # "true", so no image with such a finding is published. A matrix entry can
+  # override it with scan_fail: "false" (its findings still go to code
+  # scanning, and a full report to each scan job's artifacts).
+  SCAN_FAIL: "true"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -102,22 +102,30 @@ jobs:
           - name: conquest-smk-7.32.4-runner
             file: docker/smk-runner/v7.Dockerfile
             build_args: SNAKEMAKE_VERSION=7.32.4
-          # Plugin pins per Nextflow version as in images.yaml (nf-runtime)
+          # Plugin pins per Nextflow version as in images.yaml (nf-runtime).
+          # scan_fail "false": the Nextflow framework jar and the nf-amazon
+          # plugin bundle Java libraries with fixable findings (Jackson,
+          # Guava, jsoup, pf4j, Netty) that no Nextflow release fixes
+          # entirely yet (elixir-cloud-aai/generic-issues#144)
           - name: conquest-nf-24.10.4-runner
             file: docker/nf-runner/Dockerfile
             nxf_version: "24.10.4"
+            scan_fail: "false"
             nxf_plugins: "nf-ga4gh@1.3.0 nf-amazon@2.9.0"
           - name: conquest-nf-25.04.3-runner
             file: docker/nf-runner/Dockerfile
             nxf_version: "25.04.3"
+            scan_fail: "false"
             nxf_plugins: "nf-ga4gh@1.3.0 nf-amazon@2.9.0"
           - name: conquest-nf-25.10.2-runner
             file: docker/nf-runner/Dockerfile
             nxf_version: "25.10.2"
+            scan_fail: "false"
             nxf_plugins: "nf-ga4gh@1.4.0 nf-amazon@2.9.0"
           - name: conquest-nf-25.10.4-runner
             file: docker/nf-runner/Dockerfile
             nxf_version: "25.10.4"
+            scan_fail: "false"
             nxf_plugins: "nf-ga4gh@1.4.0 nf-amazon@2.9.0"
     steps:
       - &checkout
@@ -183,10 +191,10 @@ jobs:
           image: ci/${{ matrix.name }}:pr
           category: ghcr-${{ matrix.name }}
           upload: "false"
-          # Informational until SCAN_FAIL is "true": the full report goes to
-          # the artifact trivy-report-ghcr-<image>
+          # The full report, unfixed findings included, goes to the artifact
+          # trivy-report-ghcr-<image>
           report: "true"
-          fail: ${{ env.SCAN_FAIL }}
+          fail: ${{ matrix.scan_fail || env.SCAN_FAIL }}
 
   # ---------------------------------------------------------------------------
   # Pushes: push each image by digest, untagged.
@@ -271,7 +279,7 @@ jobs:
           image: ${{ env.REGISTRY }}/${{ matrix.name }}@${{ steps.digest.outputs.digest }}
           category: ghcr-${{ matrix.name }}
           report: "true"
-          fail: ${{ env.SCAN_FAIL }}
+          fail: ${{ matrix.scan_fail || env.SCAN_FAIL }}
 
   # ---------------------------------------------------------------------------
   # Attest, sign, then tag each scanned digest.

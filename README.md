@@ -1192,7 +1192,11 @@ CI publishes the images of every push to `master`: to Docker Hub
 (`docker.io/anurag1201/*`, `.github/workflows/images.yaml`, this repository
 only) and to the GitHub Container Registry of the repository's owner
 (`ghcr.io/<owner>/*`, `.github/workflows/ghcr.yaml`, also in forks), tagged
-`sha-<short commit>`. The GHCR images (linux/amd64) are scanned with Trivy,
+`sha-<short commit>`. The GHCR images (linux/amd64) are scanned with Trivy
+(a fixable critical or high finding stops publication, except for the
+Nextflow runners, whose Nextflow framework and nf-amazon plugin bundle
+Java libraries with such findings; accepted findings are listed with
+reasons in `.trivyignore.yaml`),
 signed with cosign (keyless) and carry build provenance attestations; pin
 them by digest (the chart's `tag` values take `sha-<short>@sha256:<digest>`).
 GHCR has `sha-*` tags only (no `latest` or version tags yet).
