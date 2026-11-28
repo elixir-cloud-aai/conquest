@@ -21,8 +21,9 @@ ARG SNAKEMAKE_VERSION=9.17.3
 ARG MINIFORGE_VERSION=26.3.2-3
 
 # apt-get upgrade: the Debian security fixes the python base image doesn't
-# have yet. SECURITY_REFRESH (ghcr.yaml passes the date) invalidates the
-# build cache from here on, so a cached layer doesn't keep old packages.
+# have yet. SECURITY_REFRESH (ghcr.yaml passes the build's date and attempt)
+# invalidates the build cache from here on, so a build on a new day or a
+# re-run doesn't reuse layers with old packages.
 ARG SECURITY_REFRESH=
 RUN apt-get update \
     && apt-get upgrade -y \

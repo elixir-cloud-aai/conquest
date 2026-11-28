@@ -40,7 +40,13 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 # ---- Runtime stage ----
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata \
+# SECURITY_REFRESH (ghcr.yaml passes the build's date and attempt)
+# invalidates the build cache from here on, so a build on a new day or a
+# re-run doesn't reuse a layer with old packages (apk upgrade: the fixes
+# the alpine image doesn't have yet).
+ARG SECURITY_REFRESH=
+RUN apk upgrade --no-cache \
+    && apk add --no-cache ca-certificates tzdata \
     && adduser -D -u 1000 conquest
 
 COPY --from=builder /conquest /usr/local/bin/conquest

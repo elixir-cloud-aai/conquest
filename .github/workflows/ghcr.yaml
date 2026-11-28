@@ -160,15 +160,17 @@ jobs:
           provenance: false
           sbom: false
 
+      # The key for SECURITY_REFRESH: the first build on a new day, and every
+      # re-run, rebuilds the OS and conda security updates in the Dockerfiles
+      # instead of reusing their cached layers (images without the argument
+      # ignore it)
+      - &refresh
+        name: Set security refresh key
+        id: refresh
+        run: echo "key=$(date -u +%Y-%m-%d)-${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
+
       # Pull requests load the image into the local Docker engine; pushes
       # push it by digest only (untagged), with SBOM and provenance
-      # A date for SECURITY_REFRESH: the Debian and conda security updates
-      # in the Dockerfiles are rebuilt at least daily, not kept from cache
-      - &refresh
-        name: Set security refresh date
-        id: refresh
-        run: echo "date=$(date -u +%Y-%m-%d)" >> "${GITHUB_OUTPUT}"
-
       - &build-image
         name: Build image
         id: build
@@ -180,7 +182,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           build-args: |
             ${{ matrix.build_args }}
-            SECURITY_REFRESH=${{ steps.refresh.outputs.date }}
+            SECURITY_REFRESH=${{ steps.refresh.outputs.key }}
             ${{ matrix.nxf_version && 'NXF_BASE_IMAGE=nf-runtime' || '' }}
             ${{ matrix.nxf_version && format('NXF_PLUGINS_ALLOWED={0}', env.NXF_PLUGINS_ALLOWED) || '' }}
           build-contexts: ${{ matrix.nxf_version && format('nf-runtime=oci-layout://{0}/nf-runtime@{1}', runner.temp, steps.nf-runtime.outputs.digest) || '' }}

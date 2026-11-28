@@ -74,9 +74,11 @@ RUN set -eux; \
         "https://www.nextflow.io/releases/v${NXF_VER}/nextflow-${NXF_VER}-one.jar"; \
     echo "${jar_sha256}  ${jar}" | sha256sum -c -; \
     nextflow -version; \
-    # The launcher found the verified jar: it downloaded no other one
+    # The launcher used the verified jar: it downloaded no other one and
+    # left this one unchanged
     set -- "${NXF_HOME}"/framework/*/*.jar; \
-    test "$#" -eq 1 && test "$1" = "${jar}"; \
+    test "$#" -eq 1; \
+    test "$1" = "${jar}"; \
     echo "${jar_sha256}  ${jar}" | sha256sum -c -; \
     chown -R 1000:1000 "${NXF_HOME}"
 
